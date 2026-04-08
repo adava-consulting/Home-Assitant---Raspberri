@@ -157,12 +157,6 @@ def _select_prompt_targets(
     if not items:
         return {}
 
-    if len(items) <= max_targets:
-        return {
-            target_id: _compact_target_capabilities(capabilities)
-            for target_id, capabilities in items
-        }
-
     scored_items = [
         (target_id, capabilities, _score_target(text, target_id, capabilities))
         for target_id, capabilities in items

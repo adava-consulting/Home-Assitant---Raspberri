@@ -313,7 +313,18 @@ SCRIPT_ACTIONS = {
     )
 }
 
-DEFAULT_TARGET_ALIASES: dict[str, set[str]] = {}
+DEFAULT_TARGET_ALIASES: dict[str, set[str]] = {
+    "cafetera": {
+        "coffee machine",
+        "coffee maker",
+        "large coffee machine",
+        "large coffee maker",
+    },
+    "prepare_bedtime": {
+        "bedtime",
+        "prepare the house for bedtime",
+    },
+}
 
 GROUP_EXPANSION_ACTIONS: dict[str, set[str]] = {
     "light": {"turn_on"},
