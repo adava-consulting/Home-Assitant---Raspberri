@@ -1,0 +1,21 @@
+- id: assist_bridge_command
+  alias: Assist Bridge Command
+  description: Forwards all Assist text commands to the local backend.
+  triggers:
+    - trigger: conversation
+      command:
+        - "{command_text}"
+  actions:
+    - variables:
+        command_text: "{{ trigger.slots.command_text }}"
+    - action: script.send_command_to_bridge
+      data:
+        command_text: "{{ command_text }}"
+        dry_run: false
+      response_variable: bridge_result
+    - variables:
+        assistant_reply: >-
+          {% set result = bridge_result if bridge_result is defined and bridge_result is mapping else {} %}
+          {{ result.get("assistant_response", "I had trouble processing that command.") }}
+    - set_conversation_response: "{{ assistant_reply }}"
+  mode: single

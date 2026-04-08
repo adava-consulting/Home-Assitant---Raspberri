@@ -1,0 +1,26 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 3} {
+  puts stderr "usage: ssh_command.expect <password> <host> <command>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set command [lindex $argv 2]
+set remote "lucas@$host"
+
+spawn ssh -o StrictHostKeyChecking=accept-new $remote $command
+expect {
+  -re "(?i)password:" {
+    send "$password\r"
+    exp_continue
+  }
+  eof {}
+}
+
+catch wait result
+set exit_status [lindex $result 3]
+exit $exit_status

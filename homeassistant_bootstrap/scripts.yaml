@@ -1,0 +1,231 @@
+prepare_bedtime:
+  alias: Prepare Bedtime
+  mode: single
+  sequence:
+    - service: input_boolean.turn_off
+      target:
+        entity_id:
+          - input_boolean.virtual_living_room_light
+          - input_boolean.virtual_kitchen_light
+          - input_boolean.guest_mode
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.bedtime_mode
+
+alfajor_office_toggle:
+  alias: Alfajor Office Toggle
+  mode: single
+  sequence:
+    - service: light.toggle
+      target:
+        entity_id: light.office
+
+send_command_to_bridge:
+  alias: Send Command To Bridge
+  mode: queued
+  fields:
+    command_text:
+      name: Command text
+      description: Text that will be sent to the backend.
+      required: true
+      selector:
+        text:
+    dry_run:
+      name: Dry run
+      description: If enabled, the backend interprets the request without executing it.
+      default: false
+      selector:
+        boolean:
+  sequence:
+    - action: rest_command.command_bridge_interpret
+      data:
+        command_text: "{{ command_text }}"
+        dry_run: "{{ dry_run | default(false) }}"
+      response_variable: bridge_response
+      continue_on_error: true
+    - variables:
+        bridge_result: >-
+          {% set response = bridge_response if bridge_response is defined and bridge_response is mapping else {} %}
+          {% set content = response.get('content', {}) %}
+          {% set detail = content.get('detail') if content is mapping else none %}
+          {% set assistant_response = content.get('assistant_response') if content is mapping else none %}
+          {{
+            {
+              "status": response.get("status", 0),
+              "content": content,
+              "assistant_response": assistant_response
+                if assistant_response
+                else detail
+                  if detail
+                  else "I had trouble processing that command."
+            }
+          }}
+    - stop: Bridge response captured
+      response_variable: bridge_result
+
+show_scheduled_bridge_jobs:
+  alias: Show Scheduled Bridge Jobs
+  mode: single
+  sequence:
+    - variables:
+        jobs: "{{ state_attr('sensor.command_bridge_pending_jobs', 'jobs') or [] }}"
+        message: >-
+          {% if jobs | count == 0 %}
+          No pending scheduled bridge jobs.
+          {% else %}
+          {% for job in jobs %}
+          - {{ job.job_id }} | {{ job.text }} | due {{ job.due_at }}
+          {% if not loop.last %}\n{% endif %}
+          {% endfor %}
+          {% endif %}
+    - action: persistent_notification.create
+      data:
+        title: Scheduled Bridge Jobs
+        message: "{{ message }}"
+
+cancel_scheduled_bridge_job:
+  alias: Cancel Scheduled Bridge Job
+  mode: single
+  fields:
+    job_id:
+      name: Job ID
+      description: Scheduled job identifier to cancel.
+      required: true
+      selector:
+        text:
+  sequence:
+    - action: rest_command.command_bridge_cancel_scheduled_job
+      data:
+        job_id: "{{ job_id }}"
+    - action: persistent_notification.create
+      data:
+        title: Scheduled Bridge Jobs
+        message: "Cancel request sent for job {{ job_id }}."
+
+show_bridge_routines:
+  alias: Show Bridge Routines
+  mode: single
+  sequence:
+    - variables:
+        routines: >-
+          {{ state_attr('sensor.command_bridge_routines', 'routines')
+             or state_attr('sensor.command_bridge_active_routines', 'routines')
+             or [] }}
+        message: >-
+          {% if routines | count == 0 %}
+          No bridge routines.
+          {% else %}
+          {% for routine in routines %}
+          {{ loop.index }}. {{ routine.name }}
+          ID: {{ routine.routine_id }}
+          Status: {{ routine.status }}
+          Schedule: {{ routine.routine.type }} at {{ routine.routine.time }}
+          Next run: {{ routine.next_run_at }}
+          Actions:
+          {% for item in routine.actions %}
+          - {{ item.action | replace('_', ' ') }} {{ item.target }}{% if item.parameters %} with {{ item.parameters }}{% endif %}
+          {% endfor %}
+          {% if not loop.last %}\n{% endif %}
+          {% endfor %}
+          {% endif %}
+    - action: persistent_notification.create
+      data:
+        title: Bridge Routines
+        message: "{{ message }}"
+
+disable_bridge_routine:
+  alias: Disable Bridge Routine
+  mode: single
+  fields:
+    routine_id:
+      name: Routine ID
+      description: Bridge routine identifier to disable.
+      required: true
+      selector:
+        text:
+  sequence:
+    - action: rest_command.command_bridge_disable_routine
+      data:
+        routine_id: "{{ routine_id }}"
+    - action: persistent_notification.create
+      data:
+        title: Bridge Routines
+        message: "Disable request sent for routine {{ routine_id }}."
+
+enable_bridge_routine:
+  alias: Enable Bridge Routine
+  mode: single
+  fields:
+    routine_id:
+      name: Routine ID
+      description: Bridge routine identifier to enable.
+      required: true
+      selector:
+        text:
+  sequence:
+    - action: rest_command.command_bridge_enable_routine
+      data:
+        routine_id: "{{ routine_id }}"
+    - action: persistent_notification.create
+      data:
+        title: Bridge Routines
+        message: "Enable request sent for routine {{ routine_id }}."
+
+update_bridge_routine_time:
+  alias: Update Bridge Routine Time
+  mode: single
+  fields:
+    routine_id:
+      name: Routine ID
+      description: Bridge routine identifier to update.
+      required: true
+      selector:
+        text:
+    routine_time:
+      name: Time
+      description: New daily time in 24-hour HH:MM format.
+      required: true
+      selector:
+        text:
+  sequence:
+    - action: rest_command.command_bridge_update_routine_time
+      data:
+        routine_id: "{{ routine_id }}"
+        routine_time: "{{ routine_time }}"
+    - action: persistent_notification.create
+      data:
+        title: Bridge Routines
+        message: "Update request sent for routine {{ routine_id }} to run at {{ routine_time }}."
+
+delete_bridge_routine:
+  alias: Delete Bridge Routine
+  mode: single
+  fields:
+    routine_id:
+      name: Routine ID
+      description: Bridge routine identifier to delete.
+      required: true
+      selector:
+        text:
+  sequence:
+    - action: rest_command.command_bridge_delete_routine
+      data:
+        routine_id: "{{ routine_id }}"
+    - action: persistent_notification.create
+      data:
+        title: Bridge Routines
+        message: "Delete request sent for routine {{ routine_id }}."
+
+welcome_guests:
+  alias: Welcome Guests
+  mode: single
+  sequence:
+    - service: input_boolean.turn_on
+      target:
+        entity_id:
+          - input_boolean.virtual_living_room_light
+          - input_boolean.virtual_kitchen_light
+          - input_boolean.guest_mode
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.bedtime_mode

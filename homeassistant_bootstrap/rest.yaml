@@ -1,0 +1,29 @@
+- resource: http://127.0.0.1:8000/scheduled-jobs?status=pending
+  scan_interval: 10
+  timeout: 10
+  sensor:
+    - name: Command Bridge Pending Jobs
+      unique_id: command_bridge_pending_jobs
+      value_template: "{{ value_json.count | default(0) }}"
+      json_attributes:
+        - jobs
+
+- resource: http://127.0.0.1:8000/routines?status=enabled
+  scan_interval: 30
+  timeout: 10
+  sensor:
+    - name: Command Bridge Active Routines
+      unique_id: command_bridge_active_routines
+      value_template: "{{ value_json.count | default(0) }}"
+      json_attributes:
+        - routines
+
+- resource: http://127.0.0.1:8000/routines
+  scan_interval: 30
+  timeout: 10
+  sensor:
+    - name: Command Bridge Routines
+      unique_id: command_bridge_routines
+      value_template: "{{ value_json.count | default(0) }}"
+      json_attributes:
+        - routines

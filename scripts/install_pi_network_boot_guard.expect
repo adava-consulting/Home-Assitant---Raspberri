@@ -1,0 +1,38 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 3} {
+  puts stderr "usage: install_pi_network_boot_guard.expect <password> <host> <project_dir>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set project_dir [lindex $argv 2]
+set remote "lucas@$host"
+set remote_dir "/home/lucas/boot-services"
+
+proc run_with_password {password command_args} {
+  spawn {*}$command_args
+  expect {
+    -re "(?i)password:" {
+      send "$password\r"
+      exp_continue
+    }
+    eof {}
+  }
+
+  catch wait result
+  set exit_status [lindex $result 3]
+  if {$exit_status != 0} {
+    exit $exit_status
+  }
+}
+
+run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote mkdir -p $remote_dir]
+run_with_password $password [list rsync -av "$project_dir/boot_services/" "$remote:$remote_dir/"]
+
+set install_cmd "echo $password | sudo -S -p '' install -m 0755 $remote_dir/wait-for-internet-and-restart-homeassistant.sh /usr/local/bin/wait-for-internet-and-restart-homeassistant.sh && echo $password | sudo -S -p '' mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d && echo $password | sudo -S -p '' install -m 0644 $remote_dir/homeassistant-network-stabilizer.service /etc/systemd/system/homeassistant-network-stabilizer.service && echo $password | sudo -S -p '' install -m 0644 $remote_dir/systemd-networkd-wait-online-wlan0.conf /etc/systemd/system/systemd-networkd-wait-online.service.d/wlan0.conf && echo $password | sudo -S -p '' systemctl daemon-reload && echo $password | sudo -S -p '' systemctl enable systemd-networkd-wait-online.service homeassistant-network-stabilizer.service && echo $password | sudo -S -p '' systemctl start homeassistant-network-stabilizer.service && systemctl is-enabled systemd-networkd-wait-online.service && systemctl is-enabled homeassistant-network-stabilizer.service && systemctl status homeassistant-network-stabilizer.service --no-pager -l | sed -n '1,120p'"
+
+run_with_password $password [list ssh $remote $install_cmd]

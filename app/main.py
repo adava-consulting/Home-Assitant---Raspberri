@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+import logging
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+
+from app.config import Settings, get_settings
+from app.audio_output import AudioOutputService
+from app.errors import BridgeError, UpstreamServiceError, ValidationError
+from app.home_assistant import HomeAssistantClient
+from app.interpreter_factory import build_interpreter
+from app.models import (
+    CommandRequest,
+    CommandResponse,
+    RoutineListResponse,
+    RoutineResponse,
+    RoutineUpdateRequest,
+    SavedSceneListResponse,
+    SavedSceneResponse,
+    ScheduledJobListResponse,
+    ScheduledJobResponse,
+)
+from app.orchestrator import CommandOrchestrator
+from app.routines import RoutineService
+from app.saved_scenes import SavedSceneService
+from app.scheduler import SchedulerService
+from app.state_memory import PreviousStateMemoryService
+
+
+def _configure_logging(settings: Settings) -> None:
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+app = FastAPI(title="Home Assistant Command Bridge", version="0.1.0")
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    settings = get_settings()
+    _configure_logging(settings)
+    app.state.settings = settings
+    app.state.home_assistant = HomeAssistantClient(settings)
+    app.state.interpreter_bundle = build_interpreter(settings)
+    app.state.audio_output = AudioOutputService(settings)
+    await app.state.audio_output.start()
+    app.state.state_memory = PreviousStateMemoryService(settings, app.state.home_assistant)
+    await app.state.state_memory.start()
+    app.state.scheduler = SchedulerService(
+        settings,
+        app.state.home_assistant,
+        state_memory=app.state.state_memory,
+    )
+    await app.state.scheduler.start()
+    app.state.routines = RoutineService(
+        settings,
+        app.state.home_assistant,
+        state_memory=app.state.state_memory,
+    )
+    await app.state.routines.start()
+    app.state.saved_scenes = SavedSceneService(settings)
+    await app.state.saved_scenes.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    saved_scenes = getattr(app.state, "saved_scenes", None)
+    if saved_scenes is not None:
+        await saved_scenes.stop()
+    routines = getattr(app.state, "routines", None)
+    if routines is not None:
+        await routines.stop()
+    scheduler = getattr(app.state, "scheduler", None)
+    if scheduler is not None:
+        await scheduler.stop()
+    state_memory = getattr(app.state, "state_memory", None)
+    if state_memory is not None:
+        await state_memory.stop()
+    audio_output = getattr(app.state, "audio_output", None)
+    if audio_output is not None:
+        await audio_output.stop()
+
+
+def get_orchestrator(request: Request) -> CommandOrchestrator:
+    return CommandOrchestrator(
+        request.app.state.settings,
+        request.app.state.home_assistant,
+        request.app.state.interpreter_bundle.interpreter,
+        scheduler=request.app.state.scheduler,
+        routines=request.app.state.routines,
+        saved_scenes=request.app.state.saved_scenes,
+        state_memory=request.app.state.state_memory,
+        audio_output=request.app.state.audio_output,
+    )
+
+
+@app.get("/health")
+async def health(request: Request) -> dict[str, str]:
+    interpreter_bundle = request.app.state.interpreter_bundle
+    scheduler = request.app.state.scheduler
+    routines = request.app.state.routines
+    saved_scenes = request.app.state.saved_scenes
+    return {
+        "status": "ok",
+        "interpreter": interpreter_bundle.name,
+        "scheduled_jobs": str(scheduler.pending_count),
+        "routines": str(routines.enabled_count),
+        "saved_scenes": str(saved_scenes.active_count),
+    }
+
+
+@app.post("/commands/interpret", response_model=CommandResponse)
+async def interpret_command(
+    request: CommandRequest,
+    orchestrator: CommandOrchestrator = Depends(get_orchestrator),
+) -> CommandResponse:
+    try:
+        return await orchestrator.process(request.text, request.dry_run)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UpstreamServiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/scheduled-jobs", response_model=ScheduledJobListResponse)
+async def list_scheduled_jobs(
+    request: Request,
+    status: str | None = Query(default=None),
+) -> ScheduledJobListResponse:
+    scheduler = request.app.state.scheduler
+    allowed_statuses = {"pending", "completed", "failed", "cancelled"}
+    if status is not None and status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+
+    jobs = await scheduler.list_jobs(status=status)
+    return ScheduledJobListResponse(count=len(jobs), jobs=jobs)
+
+
+@app.post("/scheduled-jobs/{job_id}/cancel", response_model=ScheduledJobResponse)
+async def cancel_scheduled_job(job_id: str, request: Request) -> ScheduledJobResponse:
+    scheduler = request.app.state.scheduler
+    try:
+        return await scheduler.cancel_job(job_id)
+    except BridgeError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+
+@app.get("/routines", response_model=RoutineListResponse)
+async def list_routines(
+    request: Request,
+    status: str | None = Query(default=None),
+) -> RoutineListResponse:
+    routines = request.app.state.routines
+    allowed_statuses = {"enabled", "disabled", "deleted"}
+    if status is not None and status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+
+    routine_list = await routines.list_routines(status=status)
+    return RoutineListResponse(count=len(routine_list), routines=routine_list)
+
+
+@app.post("/routines/{routine_id}/disable", response_model=RoutineResponse)
+async def disable_routine(routine_id: str, request: Request) -> RoutineResponse:
+    routines = request.app.state.routines
+    try:
+        return await routines.disable_routine(routine_id)
+    except BridgeError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+
+@app.post("/routines/{routine_id}/enable", response_model=RoutineResponse)
+async def enable_routine(routine_id: str, request: Request) -> RoutineResponse:
+    routines = request.app.state.routines
+    try:
+        return await routines.enable_routine(routine_id)
+    except BridgeError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+
+@app.post("/routines/{routine_id}/time", response_model=RoutineResponse)
+async def update_routine_time(
+    routine_id: str,
+    update: RoutineUpdateRequest,
+    request: Request,
+) -> RoutineResponse:
+    routines = request.app.state.routines
+    try:
+        return await routines.update_routine_time(routine_id, update.time)
+    except BridgeError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+
+@app.delete("/routines/{routine_id}", response_model=RoutineResponse)
+async def delete_routine(routine_id: str, request: Request) -> RoutineResponse:
+    routines = request.app.state.routines
+    try:
+        return await routines.delete_routine(routine_id)
+    except BridgeError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+
+@app.get("/saved-scenes", response_model=SavedSceneListResponse)
+async def list_saved_scenes(
+    request: Request,
+    status: str | None = Query(default=None),
+) -> SavedSceneListResponse:
+    saved_scenes = request.app.state.saved_scenes
+    allowed_statuses = {"active", "deleted"}
+    if status is not None and status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+
+    scene_list = await saved_scenes.list_scenes(status=status)
+    return SavedSceneListResponse(count=len(scene_list), scenes=scene_list)
+
+
+@app.post("/saved-scenes/{scene_id}/activate", response_model=CommandResponse)
+async def activate_saved_scene(scene_id: str, request: Request) -> CommandResponse:
+    saved_scenes = request.app.state.saved_scenes
+    try:
+        scene = await saved_scenes.get_scene(scene_id)
+    except BridgeError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+    orchestrator = get_orchestrator(request)
+    return await orchestrator.process(scene.name, dry_run=False)
+
+
+@app.delete("/saved-scenes/{scene_id}", response_model=SavedSceneResponse)
+async def delete_saved_scene(scene_id: str, request: Request) -> SavedSceneResponse:
+    saved_scenes = request.app.state.saved_scenes
+    try:
+        return await saved_scenes.delete_scene(scene_id)
+    except BridgeError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc

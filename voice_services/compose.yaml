@@ -1,0 +1,20 @@
+services:
+  whisper:
+    image: rhasspy/wyoming-whisper:latest
+    container_name: wyoming-whisper
+    restart: unless-stopped
+    command:
+      - --model
+      - tiny-int8
+      - --language
+      - es
+      - --uri
+      - tcp://0.0.0.0:10300
+      - --data-dir
+      - /data
+      - --download-dir
+      - /data
+    ports:
+      - "10300:10300"
+    volumes:
+      - ./whisper-data:/data

@@ -1,0 +1,15 @@
+- id: guest_mode_scene
+  name: Guest Mode
+  entities:
+    input_boolean.virtual_living_room_light: "on"
+    input_boolean.virtual_kitchen_light: "on"
+    input_boolean.guest_mode: "on"
+    input_boolean.bedtime_mode: "off"
+
+- id: good_night_scene
+  name: Good Night
+  entities:
+    input_boolean.virtual_living_room_light: "off"
+    input_boolean.virtual_kitchen_light: "off"
+    input_boolean.guest_mode: "off"
+    input_boolean.bedtime_mode: "on"

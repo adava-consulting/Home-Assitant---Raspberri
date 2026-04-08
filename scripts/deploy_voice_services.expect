@@ -1,0 +1,38 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 4} {
+  puts stderr "usage: deploy_voice_services.expect <password> <host> <local_dir> <remote_dir>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set local_dir [lindex $argv 2]
+set remote_dir [lindex $argv 3]
+set remote "lucas@$host"
+
+proc run_with_password {password command_args} {
+  spawn {*}$command_args
+  expect {
+    -re "(?i)password:" {
+      send "$password\r"
+      exp_continue
+    }
+    eof {}
+  }
+
+  catch wait result
+  set exit_status [lindex $result 3]
+  if {$exit_status != 0} {
+    exit $exit_status
+  }
+}
+
+run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote mkdir -p $remote_dir]
+run_with_password $password [list rsync -av "$local_dir/compose.yaml" "$remote:$remote_dir/"]
+
+set deploy_cmd "cd $remote_dir && docker compose up -d && docker compose ps"
+run_with_password $password [list ssh $remote $deploy_cmd]
+

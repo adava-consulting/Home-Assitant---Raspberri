@@ -1,0 +1,40 @@
+command_bridge_interpret:
+  url: "http://127.0.0.1:8000/commands/interpret"
+  method: post
+  content_type: "application/json"
+  timeout: 60
+  payload: >-
+    {
+      "text": {{ command_text | tojson }},
+      "dry_run": {{ dry_run | default(false) | bool | tojson }}
+    }
+
+command_bridge_cancel_scheduled_job:
+  url: "http://127.0.0.1:8000/scheduled-jobs/{{ job_id }}/cancel"
+  method: post
+  timeout: 20
+
+command_bridge_disable_routine:
+  url: "http://127.0.0.1:8000/routines/{{ routine_id }}/disable"
+  method: post
+  timeout: 20
+
+command_bridge_enable_routine:
+  url: "http://127.0.0.1:8000/routines/{{ routine_id }}/enable"
+  method: post
+  timeout: 20
+
+command_bridge_update_routine_time:
+  url: "http://127.0.0.1:8000/routines/{{ routine_id }}/time"
+  method: post
+  content_type: "application/json"
+  timeout: 20
+  payload: >-
+    {
+      "time": {{ routine_time | tojson }}
+    }
+
+command_bridge_delete_routine:
+  url: "http://127.0.0.1:8000/routines/{{ routine_id }}"
+  method: delete
+  timeout: 20

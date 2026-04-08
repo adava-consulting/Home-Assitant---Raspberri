@@ -1,0 +1,41 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 4} {
+  puts stderr "usage: set_pi_interpreter_mode.expect <password> <host> <remote_dir> <mode>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set remote_dir [lindex $argv 2]
+set mode [lindex $argv 3]
+set remote "lucas@$host"
+
+set allowed_modes {local_rules anthropic_api claude_cli auto}
+if {[lsearch -exact $allowed_modes $mode] == -1} {
+  puts stderr "invalid mode: $mode"
+  puts stderr "allowed modes: [join $allowed_modes {, }]"
+  exit 1
+}
+
+proc run_with_password {password command_args} {
+  spawn {*}$command_args
+  expect {
+    -re "(?i)password:" {
+      send "$password\r"
+      exp_continue
+    }
+    eof {}
+  }
+
+  catch wait result
+  set exit_status [lindex $result 3]
+  if {$exit_status != 0} {
+    exit $exit_status
+  }
+}
+
+set remote_cmd "cd $remote_dir && if grep -q '^INTERPRETER_MODE=' .env; then sed -i 's/^INTERPRETER_MODE=.*/INTERPRETER_MODE=$mode/' .env; else printf '\\nINTERPRETER_MODE=$mode\\n' >> .env; fi && docker compose up -d command-bridge && docker compose ps && curl -s http://127.0.0.1:8000/health && echo"
+run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote $remote_cmd]

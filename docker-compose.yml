@@ -1,0 +1,15 @@
+services:
+  command-bridge:
+    build: .
+    container_name: ha-command-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - "29"
+    volumes:
+      - /home/lucas:/home/claude-host-home

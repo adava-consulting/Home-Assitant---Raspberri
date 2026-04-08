@@ -1,0 +1,39 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 3} {
+  puts stderr "usage: install_piper_voice_on_pi.expect <password> <host> <remote_model_dir>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set remote_model_dir [lindex $argv 2]
+set remote "lucas@$host"
+
+set model_base "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium"
+set model_name "en_US-lessac-medium.onnx"
+set config_name "en_US-lessac-medium.onnx.json"
+
+proc run_with_password {password command_args} {
+  spawn {*}$command_args
+  expect {
+    -re "(?i)password:" {
+      send "$password\r"
+      exp_continue
+    }
+    eof {}
+  }
+
+  catch wait result
+  set exit_status [lindex $result 3]
+  if {$exit_status != 0} {
+    exit $exit_status
+  }
+}
+
+run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote mkdir -p $remote_model_dir]
+
+set download_cmd "mkdir -p $remote_model_dir && curl -L \"$model_base/$model_name?download=true\" -o \"$remote_model_dir/$model_name\" && curl -L \"$model_base/$config_name?download=true\" -o \"$remote_model_dir/$config_name\" && ls -lh \"$remote_model_dir/$model_name\" \"$remote_model_dir/$config_name\""
+run_with_password $password [list ssh $remote $download_cmd]

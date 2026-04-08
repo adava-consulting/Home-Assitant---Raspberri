@@ -1,0 +1,15 @@
+virtual_living_room_light:
+  name: Virtual Living Room Light
+  icon: mdi:lightbulb
+
+virtual_kitchen_light:
+  name: Virtual Kitchen Light
+  icon: mdi:lightbulb-outline
+
+guest_mode:
+  name: Guest Mode
+  icon: mdi:account-group
+
+bedtime_mode:
+  name: Bedtime Mode
+  icon: mdi:sleep

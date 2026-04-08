@@ -1,0 +1,21 @@
+[Unit]
+Description=Restart Home Assistant after internet connectivity is stable
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=lucas
+Group=lucas
+WorkingDirectory=/home/lucas/homeassistant
+Environment=CONNECTIVITY_HOST=apigw.tuyaus.com
+Environment=CONNECTIVITY_URL=https://apigw.tuyaus.com
+Environment=HOMEASSISTANT_DIR=/home/lucas/homeassistant
+Environment=MAX_WAIT_SECONDS=900
+Environment=INTERVAL_SECONDS=5
+ExecStart=/usr/local/bin/wait-for-internet-and-restart-homeassistant.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

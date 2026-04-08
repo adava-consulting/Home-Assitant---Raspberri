@@ -1,0 +1,7 @@
+- platform: group
+  name: Office
+  unique_id: office
+  entities:
+    - light.office_light_1
+    - light.office_light_2
+    - light.office_light_3

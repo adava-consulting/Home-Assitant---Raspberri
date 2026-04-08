@@ -1,0 +1,16 @@
+[Unit]
+Description=Wyoming Satellite for ReSpeaker Lite USB
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lucas
+WorkingDirectory=/home/lucas/ha-command-bridge/voice_services
+Environment=VOICE_SATELLITE_ENV_FILE=/home/lucas/ha-command-bridge/voice_services/respeaker_lite_satellite.env
+ExecStart=/home/lucas/ha-command-bridge/voice_services/run_wyoming_satellite.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

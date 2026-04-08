@@ -1,0 +1,46 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 2} {
+  puts stderr "usage: install_claude_on_pi.expect <password> <host>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set remote "lucas@$host"
+
+proc run_with_password {password command_args} {
+  spawn {*}$command_args
+  expect {
+    -re "(?i)password:" {
+      send "$password\r"
+      exp_continue
+    }
+    eof {}
+  }
+
+  catch wait result
+  set exit_status [lindex $result 3]
+  if {$exit_status != 0} {
+    exit $exit_status
+  }
+}
+
+set install_cmd {
+  bash -lc '
+    set -e
+    mkdir -p ~/.npm-global
+    npm config set prefix ~/.npm-global
+    line='\''export PATH="$HOME/.npm-global/bin:$PATH"'\''
+    grep -qxF "$line" ~/.bashrc || printf "%s\n" "$line" >> ~/.bashrc
+    export PATH="$HOME/.npm-global/bin:$PATH"
+    npm install -g @anthropic-ai/claude-code
+    claude --version
+    which claude
+    ls -la ~/.npm-global/bin
+  '
+}
+
+run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote $install_cmd]
