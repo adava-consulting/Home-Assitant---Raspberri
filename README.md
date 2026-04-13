@@ -11,6 +11,51 @@ This service implements the "intelligent" layer of the project:
 - A model or local rule engine proposes a structured intent.
 - The backend validates every action, target, and parameter before execution.
 
+## Voice Modeling
+
+The highest-leverage quality work for this project is not the STT model alone. It
+is the voice model of the home:
+
+- expose only the entities that should be voice-controlled
+- give them stable English-friendly names
+- add aliases for the phrases a real person will actually say
+- keep scenes and scripts easy to invoke by voice
+
+The bridge now supports a dedicated `VOICE_MODEL_FILE` so this can live in a real
+JSON file instead of an oversized `.env` variable.
+
+Recommended setup:
+
+- keep broad discovery off for production-like setups by using explicit allow-lists
+- use `VOICE_MODEL_FILE` for the base model
+- reserve `TARGET_OVERRIDES_JSON` for quick one-off overrides only
+
+Example in `.env`:
+
+```bash
+VOICE_MODEL_FILE=/home/claude-host-home/ha-command-bridge/voice_model.json
+TARGET_OVERRIDES_JSON={}
+```
+
+Example file:
+
+- [voice_model.example.json](/Users/marcos/Documents/HomeAssistant/voice_model.example.json)
+
+What belongs in this file:
+
+- `allowed_entities`
+- `allowed_scenes`
+- `allowed_scripts`
+- `ignored_entities`
+- `target_overrides`
+
+Important note:
+
+- this file helps the backend understand spoken names and constrain what it can control
+- it does not replace Home Assistant areas, floors, or aliases configured in the Home Assistant UI
+- for the best Assist performance, keep both aligned
+- in this project, Assist forwards recognized text to the bridge, so many "custom sentence" wins are better modeled here first as aliases and curated allow-lists
+
 ## Request Flow
 
 1. A client sends a text request such as `get the house ready for bed`.

@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     allowed_entities_raw: str = Field("", alias="ALLOWED_ENTITIES")
     allowed_scenes_raw: str = Field("", alias="ALLOWED_SCENES")
     allowed_scripts_raw: str = Field("", alias="ALLOWED_SCRIPTS")
+    voice_model_file: str = Field("", alias="VOICE_MODEL_FILE")
     target_overrides_raw: str = Field("{}", alias="TARGET_OVERRIDES_JSON")
     request_timeout_seconds: float = Field(20.0, alias="REQUEST_TIMEOUT_SECONDS")
     audio_response_enabled: bool = Field(False, alias="AUDIO_RESPONSE_ENABLED")
@@ -141,19 +142,52 @@ def _split_csv(value: str | list[str]) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _split_or_file_list(raw_value: str | list[str], file_values: object) -> list[str]:
+    env_values = _split_csv(raw_value)
+    if env_values:
+        return env_values
+    if isinstance(file_values, list):
+        return [item.strip() for item in file_values if isinstance(item, str) and item.strip()]
+    return []
+
+
+def _load_json_file(path_value: str) -> dict:
+    path = Path(path_value).expanduser()
+    if not path_value.strip() or not path.exists() or not path.is_file():
+        return {}
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
 @property
 def allowed_entities(self: Settings) -> list[str]:
-    return _split_csv(self.allowed_entities_raw)
+    return _split_or_file_list(
+        self.allowed_entities_raw,
+        self.voice_model.get("allowed_entities"),
+    )
 
 
 @property
 def allowed_scenes(self: Settings) -> list[str]:
-    return _split_csv(self.allowed_scenes_raw)
+    return _split_or_file_list(
+        self.allowed_scenes_raw,
+        self.voice_model.get("allowed_scenes"),
+    )
 
 
 @property
 def allowed_scripts(self: Settings) -> list[str]:
-    return _split_csv(self.allowed_scripts_raw)
+    return _split_or_file_list(
+        self.allowed_scripts_raw,
+        self.voice_model.get("allowed_scripts"),
+    )
 
 
 Settings.allowed_entities = allowed_entities
@@ -168,7 +202,10 @@ def auto_discover_domains(self: Settings) -> list[str]:
 
 @property
 def ignored_entities(self: Settings) -> list[str]:
-    return _split_csv(self.ignored_entities_raw)
+    return _split_or_file_list(
+        self.ignored_entities_raw,
+        self.voice_model.get("ignored_entities"),
+    )
 
 
 Settings.auto_discover_domains = auto_discover_domains
@@ -176,24 +213,38 @@ Settings.ignored_entities = ignored_entities
 
 
 @property
+def voice_model(self: Settings) -> dict[str, object]:
+    return _load_json_file(self.voice_model_file)
+
+
+Settings.voice_model = voice_model
+
+
+@property
 def target_overrides(self: Settings) -> dict[str, dict]:
     raw = self.target_overrides_raw.strip()
-    if not raw:
-        return {}
+    payload: object = {}
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            payload = {}
 
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+    file_payload = self.voice_model.get("target_overrides")
+    normalized: dict[str, dict] = {}
+    if isinstance(file_payload, dict):
+        for target_id, override in file_payload.items():
+            if not isinstance(target_id, str) or not isinstance(override, dict):
+                continue
+            normalized[target_id] = dict(override)
 
     if not isinstance(payload, dict):
-        return {}
+        return normalized
 
-    normalized: dict[str, dict] = {}
     for target_id, override in payload.items():
         if not isinstance(target_id, str) or not isinstance(override, dict):
             continue
-        normalized[target_id] = override
+        normalized[target_id] = dict(override)
     return normalized
 
 

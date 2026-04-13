@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 
 BRIEFING_PATTERNS = (
-    re.compile(r"^\s*good\s+(?:morning|afternoon|evening|night)\s*[.!?]*\s*$", re.IGNORECASE),
+    re.compile(r"^\s*good\s+(?:morning|afternoon|evening)\s*[.!?]*\s*$", re.IGNORECASE),
     re.compile(r"\b(?:weather|forecast|temperature|rain|raining|clima|temperatura|lluvia)\b", re.IGNORECASE),
 )
 
