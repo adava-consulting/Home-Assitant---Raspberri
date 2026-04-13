@@ -324,6 +324,16 @@ cp .env.example .env
 
 `ANTHROPIC_API_KEY` is optional. If it is not configured, the backend can still run with local rules or Claude Code CLI depending on `INTERPRETER_MODE`.
 
+When the bridge runs in Docker on the same Raspberry Pi as Home Assistant, a stable
+choice for `HOME_ASSISTANT_URL` is the Docker host gateway:
+
+```bash
+HOME_ASSISTANT_URL=http://172.17.0.1:8123
+```
+
+When you run the bridge locally from your Mac instead, use the Raspberry Pi LAN
+address or a resolvable hostname such as `homeassistant.local`.
+
 ## Interpreter Modes
 
 - `local_rules`: use only the local fallback rules.
@@ -463,16 +473,16 @@ If the updated backend is already deployed, you can switch interpreter mode with
 expect scripts/set_pi_interpreter_mode.expect <password> <host> <remote_dir> claude_cli
 ```
 
-For this Raspberry Pi:
+Example for a Raspberry Pi:
 
 ```bash
-expect scripts/set_pi_interpreter_mode.expect lagudiez 192.168.68.202 /home/lucas/ha-command-bridge claude_cli
+expect scripts/set_pi_interpreter_mode.expect <password> <host> /home/lucas/ha-command-bridge claude_cli
 ```
 
 To switch back to local rules:
 
 ```bash
-expect scripts/set_pi_interpreter_mode.expect lagudiez 192.168.68.202 /home/lucas/ha-command-bridge local_rules
+expect scripts/set_pi_interpreter_mode.expect <password> <host> /home/lucas/ha-command-bridge local_rules
 ```
 
 ## Main Endpoint
@@ -538,6 +548,53 @@ For a new entity inside an already supported domain:
 1. Add the device to Home Assistant.
 2. Give it a clear English name in Home Assistant.
 3. If auto-discovery is enabled, the backend will pick it up automatically on the next request.
+
+## Managing Raspberry Pi Wi-Fi
+
+For Ubuntu Server on the Raspberry Pi, the easiest long-term setup is:
+
+- `NetworkManager` as the Netplan renderer
+- `nmcli` for scripted changes
+- `nmtui` for a simple text UI when you have local terminal access
+
+The repo includes a helper script that wraps the common Wi-Fi tasks:
+
+```bash
+expect scripts/install_pi_wifi_manager.expect <password> <host> <project_dir>
+```
+
+That installs `wifi-manager` on the Raspberry Pi under `/usr/local/bin`.
+
+Useful commands after `NetworkManager` is active:
+
+```bash
+wifi-manager list
+wifi-manager choose
+wifi-manager connect "YourWifiName"
+wifi-manager status
+sudo nmtui
+```
+
+Recommended one-time migration for Ubuntu Server if the Pi still uses `renderer: networkd`:
+
+1. Install `network-manager`
+2. Disable cloud-init network rewrites by creating `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` with:
+
+```yaml
+network:
+  config: disabled
+```
+
+3. Switch `/etc/netplan/50-cloud-init.yaml` to `renderer: NetworkManager`
+4. Keep the current Wi-Fi under `wifis:` during the migration
+5. Apply the change with `sudo netplan try` or `sudo netplan apply`
+
+Useful references:
+
+- Netplan YAML reference: https://netplan.readthedocs.io/en/latest/netplan-yaml/
+- Netplan `try`: https://netplan.readthedocs.io/en/latest/netplan-try/
+- `nmcli`: https://networkmanager.dev/docs/api/latest/nmcli.html
+- `nmtui`: https://networkmanager.dev/docs/api/latest/nmtui.html
 4. Add optional aliases or restrictions in `TARGET_OVERRIDES_JSON` only if you want custom behavior.
 
 You only need code changes when introducing a completely new domain or action family that is not represented in `app/capabilities.py`.

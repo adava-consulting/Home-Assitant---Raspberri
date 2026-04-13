@@ -1114,6 +1114,36 @@ class InterpreterFactoryTests(unittest.TestCase):
         self.assertEqual(plan.primary_intent.target, "light.office")
         self.assertEqual(plan.primary_intent.parameters, {"rgb_color": [255, 0, 0]})
 
+    def test_local_interpreter_routes_generic_lights_request_to_all_home_lights(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room", "light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room", "light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("turn off the lights", context))
+
+        self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
+        self.assertTrue(all(intent.action == "turn_off" for intent in plan.actions))
+
     def test_local_interpreter_parses_explicit_brightness(self):
         interpreter = LocalInterpreter(FakeSettings())
         target_capabilities = build_target_capabilities_from_lists(
@@ -1189,6 +1219,41 @@ class InterpreterFactoryTests(unittest.TestCase):
 
         self.assertEqual(plan.primary_intent.target, "light.kitchen")
         self.assertEqual(primary.calls, 1)
+
+    def test_local_first_interpreter_skips_primary_for_generic_lights_request(self):
+        primary = CountingInterpreter(single_action_plan("turn_on", "light.kitchen"))
+        local_first = LocalFirstInterpreter(
+            local=LocalInterpreter(FakeSettings()),
+            primary=primary,
+            primary_name="claude_cli",
+        )
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room", "light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room", "light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(local_first.interpret("turn on the lights", context))
+
+        self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
+        self.assertEqual(primary.calls, 0)
 
     def test_local_first_interpreter_uses_primary_for_recurring_routines(self):
         primary = CountingInterpreter(

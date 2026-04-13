@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for a stuck Wyoming Satellite streaming session
+After=wyoming-satellite.service
+Wants=wyoming-satellite.service
+
+[Service]
+Type=oneshot
+Environment=VOICE_SATELLITE_ENV_FILE=/home/lucas/ha-command-bridge/voice_services/respeaker_lite_satellite.env
+ExecStart=/home/lucas/ha-command-bridge/voice_services/satellite_watchdog_check.sh

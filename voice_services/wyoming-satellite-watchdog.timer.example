@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically check for a stuck Wyoming Satellite streaming session
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=10
+Unit=wyoming-satellite-watchdog.service
+
+[Install]
+WantedBy=timers.target

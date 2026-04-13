@@ -1,13 +1,25 @@
 services:
+  openwakeword:
+    image: rhasspy/wyoming-openwakeword:latest
+    container_name: wyoming-openwakeword
+    restart: unless-stopped
+    command:
+      - --uri
+      - tcp://0.0.0.0:10400
+      - --preload-model
+      - ${WAKE_WORD_MODEL:-hey_jarvis}
+    ports:
+      - "10400:10400"
+
   whisper:
     image: rhasspy/wyoming-whisper:latest
     container_name: wyoming-whisper
     restart: unless-stopped
     command:
       - --model
-      - tiny-int8
+      - ${WHISPER_MODEL:-base-int8}
       - --language
-      - es
+      - ${WHISPER_LANGUAGE:-en}
       - --uri
       - tcp://0.0.0.0:10300
       - --data-dir
@@ -18,3 +30,21 @@ services:
       - "10300:10300"
     volumes:
       - ./whisper-data:/data
+
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: wyoming-piper
+    restart: unless-stopped
+    command:
+      - --voice
+      - ${PIPER_VOICE:-en_US-lessac-medium}
+      - --uri
+      - tcp://0.0.0.0:10200
+      - --data-dir
+      - /data
+      - --download-dir
+      - /data
+    ports:
+      - "10200:10200"
+    volumes:
+      - ./piper-data:/data

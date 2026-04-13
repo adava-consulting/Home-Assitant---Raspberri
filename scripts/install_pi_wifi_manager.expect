@@ -2,16 +2,16 @@
 
 set timeout -1
 
-if {$argc != 4} {
-  puts stderr "usage: deploy_voice_services.expect <password> <host> <local_dir> <remote_dir>"
+if {$argc != 3} {
+  puts stderr "usage: install_pi_wifi_manager.expect <password> <host> <project_dir>"
   exit 1
 }
 
 set password [lindex $argv 0]
 set host [lindex $argv 1]
-set local_dir [lindex $argv 2]
-set remote_dir [lindex $argv 3]
+set project_dir [lindex $argv 2]
 set remote "lucas@$host"
+set remote_dir "/home/lucas/raspberry-tools"
 
 proc run_with_password {password command_args} {
   spawn {*}$command_args
@@ -31,9 +31,8 @@ proc run_with_password {password command_args} {
 }
 
 run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote mkdir -p $remote_dir]
-set rsync_args [list rsync -av --exclude __pycache__ --exclude whisper-data --exclude piper-data --exclude .env]
-lappend rsync_args "$local_dir/" "$remote:$remote_dir/"
-run_with_password $password $rsync_args
+run_with_password $password [list rsync -av "$project_dir/raspberry_tools/" "$remote:$remote_dir/"]
 
-set deploy_cmd "cd $remote_dir && docker compose up -d && docker compose ps"
-run_with_password $password [list ssh $remote $deploy_cmd]
+set install_cmd "echo $password | sudo -S -p '' install -m 0755 $remote_dir/wifi-manager.sh /usr/local/bin/wifi-manager && /usr/local/bin/wifi-manager --help | sed -n '1,40p'"
+
+run_with_password $password [list ssh $remote $install_cmd]

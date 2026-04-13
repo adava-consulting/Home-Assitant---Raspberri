@@ -90,7 +90,11 @@ class LocalInterpreter:
 
         light_parameters = self._extract_light_parameters(normalized)
         if light_parameters:
-            if self._looks_like_all_home_lights(normalized):
+            if self._should_target_all_home_lights(
+                normalized,
+                target_capabilities,
+                "turn_on",
+            ):
                 targets = self._all_home_light_targets(context, target_capabilities, "turn_on")
                 if targets:
                     return self._multi_action_plan(
@@ -158,7 +162,11 @@ class LocalInterpreter:
 
         action = self._extract_action(normalized)
         if action:
-            if action in {"turn_on", "turn_off"} and self._looks_like_all_home_lights(normalized):
+            if action in {"turn_on", "turn_off"} and self._should_target_all_home_lights(
+                normalized,
+                target_capabilities,
+                action,
+            ):
                 targets = self._all_home_light_targets(context, target_capabilities, action)
                 if targets:
                     return self._multi_action_plan(
@@ -311,6 +319,34 @@ class LocalInterpreter:
             r"\bluces\s+de\s+(?:la\s+)?casa\b",
         )
         return any(re.search(pattern, text) for pattern in patterns)
+
+    def _looks_like_generic_lights_request(self, text: str) -> bool:
+        patterns = (
+            r"\b(?:turn|switch|power)\s+(?:on|off)\s+(?:the\s+)?lights\b",
+            r"\blights\s+(?:on|off)\b",
+            r"\b(?:turn|switch|power)\s+(?:the\s+)?lights\s+(?:on|off)\b",
+        )
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def _should_target_all_home_lights(
+        self,
+        text: str,
+        target_capabilities: dict[str, TargetCapabilities],
+        action: str,
+    ) -> bool:
+        if self._looks_like_all_home_lights(text):
+            return True
+
+        if not self._looks_like_generic_lights_request(text):
+            return False
+
+        specific_target = self._find_target_by_action(
+            text,
+            target_capabilities,
+            action,
+            domain="light",
+        )
+        return specific_target is None
 
     def _all_home_light_targets(
         self,
