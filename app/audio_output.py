@@ -102,6 +102,15 @@ class AudioOutputService:
             return
         await self._queue.put(normalized)
 
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "enabled": self._enabled,
+            "preferred_engine": self._engine,
+            "active_engine": self._resolve_active_engine(),
+            "device": self._device,
+            "cache_enabled": self._cache_enabled,
+        }
+
     async def _run(self) -> None:
         while True:
             text = await self._queue.get()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import unicodedata
@@ -15,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.errors import BridgeError
 from app.models import ActionPlan, Intent, SavedSceneResponse, SavedSceneStatus
+from app.persistence import load_json_file_with_backup, write_json_file_atomic
 
 
 logger = logging.getLogger(__name__)
@@ -180,26 +180,30 @@ class SavedSceneService:
         return None
 
     async def _load_scenes(self) -> None:
-        if not self._store_path.exists():
+        data = await asyncio.to_thread(
+            load_json_file_with_backup,
+            self._store_path,
+            [],
+            logger=logger,
+            label="Saved scene store",
+        )
+        if not isinstance(data, list):
+            logger.warning("Saved scene store payload was not a list. Ignoring it.")
             return
 
-        payload = await asyncio.to_thread(self._store_path.read_text, "utf-8")
-        if not payload.strip():
-            return
-
-        data = json.loads(payload)
-        self._scenes = {
-            scene_data["scene_id"]: SavedScene.model_validate(scene_data)
-            for scene_data in data
-        }
+        scenes: dict[str, SavedScene] = {}
+        for scene_data in data:
+            try:
+                scene = SavedScene.model_validate(scene_data)
+            except Exception as exc:
+                logger.warning("Skipping invalid saved scene record: %s", exc)
+                continue
+            scenes[scene.scene_id] = scene
+        self._scenes = scenes
 
     async def _save_scenes(self) -> None:
-        serialized = json.dumps(
-            [scene.model_dump(mode="json") for scene in self._scenes.values()],
-            ensure_ascii=True,
-            indent=2,
-        )
-        await asyncio.to_thread(self._store_path.write_text, serialized, "utf-8")
+        payload = [scene.model_dump(mode="json") for scene in self._scenes.values()]
+        await asyncio.to_thread(write_json_file_atomic, self._store_path, payload)
 
     def _scene_aliases(self, name: str, aliases: list[str]) -> list[str]:
         candidates = [name, *aliases]

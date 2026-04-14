@@ -108,63 +108,7 @@ class CommandOrchestrator:
         if forced_claude_request is None and self._saved_scenes is not None:
             saved_scene = await self._saved_scenes.match_scene_request(text)
             if saved_scene is not None:
-                plan = ActionPlan(
-                    actions=saved_scene.actions,
-                    rationale=f"Matched saved scene: {saved_scene.name}.",
-                    assistant_response=f"Okay. I activated {saved_scene.name}.",
-                )
-                self._validate_plan(plan, target_capabilities)
-
-                if dry_run:
-                    results = [
-                        {
-                            "message": "Dry run only. No saved scene action executed.",
-                            "action": intent.action,
-                            "target": {"entity_id": intent.target},
-                            "parameters": intent.parameters,
-                            "saved_scene_id": saved_scene.scene_id,
-                            "saved_scene_name": saved_scene.name,
-                        }
-                        for intent in plan.actions
-                    ]
-                    executed = False
-                else:
-                    if self._state_memory is not None:
-                        await self._state_memory.capture_before_plan(plan)
-                    results = await self._home_assistant.execute_plan(plan)
-                    executed = True
-
-                assistant_response = plan.assistant_response or self._build_assistant_response(
-                    plan=plan,
-                    results=results,
-                    executed=executed,
-                    dry_run=dry_run,
-                    scheduled=False,
-                    routine_created=False,
-                    saved_scene_created=False,
-                )
-                if not dry_run and self._audio_output is not None:
-                    await self._audio_output.enqueue(
-                        self._build_spoken_response(
-                            plan=plan,
-                            assistant_response=assistant_response,
-                            executed=executed,
-                            scheduled=False,
-                        )
-                    )
-
-                return CommandResponse(
-                    text=text,
-                    actions=plan.actions,
-                    assistant_response=assistant_response,
-                    executed=executed,
-                    scheduled=False,
-                    routine_created=False,
-                    saved_scene_created=False,
-                    dry_run=dry_run,
-                    results=results,
-                    rationale=plan.rationale,
-                )
+                return await self.activate_saved_scene(saved_scene, text=text, dry_run=dry_run)
 
         plan = await self._interpreter.interpret(text, context)
         self._validate_plan(plan, target_capabilities)
@@ -317,6 +261,74 @@ class CommandOrchestrator:
             saved_scene_id=saved_scene_id,
         )
 
+    async def activate_saved_scene(
+        self,
+        saved_scene: Any,
+        *,
+        text: str,
+        dry_run: bool,
+    ) -> CommandResponse:
+        states = await self._home_assistant.get_states()
+        target_capabilities = self._build_effective_target_capabilities(states)
+        plan = ActionPlan(
+            actions=list(saved_scene.actions),
+            rationale=f"Matched saved scene: {saved_scene.name}.",
+            assistant_response=f"Okay. I activated {saved_scene.name}.",
+        )
+        self._validate_plan(plan, target_capabilities)
+
+        if dry_run:
+            results = [
+                {
+                    "message": "Dry run only. No saved scene action executed.",
+                    "action": intent.action,
+                    "target": {"entity_id": intent.target},
+                    "parameters": intent.parameters,
+                    "saved_scene_id": saved_scene.scene_id,
+                    "saved_scene_name": saved_scene.name,
+                }
+                for intent in plan.actions
+            ]
+            executed = False
+        else:
+            if self._state_memory is not None:
+                await self._state_memory.capture_before_plan(plan)
+            results = await self._home_assistant.execute_plan(plan)
+            executed = True
+
+        assistant_response = plan.assistant_response or self._build_assistant_response(
+            plan=plan,
+            results=results,
+            executed=executed,
+            dry_run=dry_run,
+            scheduled=False,
+            routine_created=False,
+            saved_scene_created=False,
+        )
+        if not dry_run and self._audio_output is not None:
+            await self._audio_output.enqueue(
+                self._build_spoken_response(
+                    plan=plan,
+                    assistant_response=assistant_response,
+                    executed=executed,
+                    scheduled=False,
+                )
+            )
+
+        return CommandResponse(
+            text=text,
+            actions=plan.actions,
+            assistant_response=assistant_response,
+            executed=executed,
+            scheduled=False,
+            routine_created=False,
+            saved_scene_created=False,
+            dry_run=dry_run,
+            results=results,
+            rationale=plan.rationale,
+            saved_scene_id=getattr(saved_scene, "scene_id", None),
+        )
+
     def _build_prompt_target_capabilities(
         self,
         visible_states: list[dict[str, Any]],
@@ -352,7 +364,7 @@ class CommandOrchestrator:
         target_capabilities = dict(self._base_target_capabilities)
 
         if not getattr(self._settings, "auto_discover_entities", False):
-            return target_capabilities
+            return self._filter_unavailable_target_capabilities(states, target_capabilities)
 
         auto_allowed_entities = [
             entity_id
@@ -364,7 +376,7 @@ class CommandOrchestrator:
         ]
 
         if not auto_allowed_entities:
-            return target_capabilities
+            return self._filter_unavailable_target_capabilities(states, target_capabilities)
 
         auto_target_capabilities = build_target_capabilities_from_lists(
             allowed_entities=auto_allowed_entities,
@@ -373,7 +385,37 @@ class CommandOrchestrator:
             target_overrides=self._settings.target_overrides,
         )
         target_capabilities.update(auto_target_capabilities)
-        return target_capabilities
+        return self._filter_unavailable_target_capabilities(states, target_capabilities)
+
+    def _filter_unavailable_target_capabilities(
+        self,
+        states: list[dict[str, Any]],
+        target_capabilities: dict[str, Any],
+    ) -> dict[str, Any]:
+        states_by_entity_id = {
+            state.get("entity_id"): state
+            for state in states
+            if isinstance(state.get("entity_id"), str)
+        }
+
+        filtered_capabilities: dict[str, Any] = {}
+        for target_id, capabilities in target_capabilities.items():
+            if getattr(capabilities, "kind", "entity") != "entity":
+                filtered_capabilities[target_id] = capabilities
+                continue
+
+            state = states_by_entity_id.get(target_id)
+            if not isinstance(state, dict):
+                filtered_capabilities[target_id] = capabilities
+                continue
+
+            entity_state = str(state.get("state", "")).strip().lower()
+            if entity_state in {"unavailable", "unknown"}:
+                continue
+
+            filtered_capabilities[target_id] = capabilities
+
+        return filtered_capabilities
 
     def _discover_entity_id_from_state(self, state: dict[str, Any]) -> str | None:
         entity_id = state.get("entity_id")
@@ -550,10 +592,17 @@ class CommandOrchestrator:
             and self._is_local_fast_action_plan(plan)
         ):
             fast_spoken_response = self._build_fast_local_spoken_response(plan)
+            fallback_ack = str(getattr(self._settings, "audio_response_fast_ack_text", "Done.")).strip()
+            ack_mode = str(
+                getattr(self._settings, "audio_response_local_ack_mode", "descriptive")
+            ).strip().lower()
+
+            if ack_mode == "generic" and fallback_ack:
+                return fallback_ack
+
             if fast_spoken_response:
                 return fast_spoken_response
 
-            fallback_ack = str(getattr(self._settings, "audio_response_fast_ack_text", "Done.")).strip()
             if fallback_ack:
                 return fallback_ack
 

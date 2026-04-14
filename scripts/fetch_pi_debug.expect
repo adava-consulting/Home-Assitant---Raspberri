@@ -1,0 +1,73 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 4} {
+  puts stderr "usage: fetch_pi_debug.expect <password> <host> <remote_bridge_dir> <local_debug_dir>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set remote_bridge_dir [lindex $argv 2]
+set local_debug_dir [lindex $argv 3]
+set remote "lucas@$host"
+set remote_bundle_dir "/home/lucas/pi-debug-export"
+set ssh_options [list -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8]
+
+proc run_with_password {password command_args} {
+  spawn {*}$command_args
+  expect {
+    -re "(?i)password:" {
+      send "$password\r"
+      exp_continue
+    }
+    eof {}
+  }
+
+  catch wait result
+  set exit_status [lindex $result 3]
+  if {$exit_status != 0} {
+    exit $exit_status
+  }
+}
+
+file mkdir $local_debug_dir
+
+set collect_cmd "rm -rf $remote_bundle_dir && mkdir -p $remote_bundle_dir/ha-config/custom_sentences/en && \
+date -Iseconds > $remote_bundle_dir/collected_at.txt && \
+hostnamectl > $remote_bundle_dir/hostnamectl.txt 2>&1 && \
+uname -a > $remote_bundle_dir/uname.txt 2>&1 && \
+uptime > $remote_bundle_dir/uptime.txt 2>&1 && \
+free -h > $remote_bundle_dir/free.txt 2>&1 && \
+df -h > $remote_bundle_dir/df.txt 2>&1 && \
+lsusb > $remote_bundle_dir/lsusb.txt 2>&1 && \
+aplay -l > $remote_bundle_dir/aplay-l.txt 2>&1 && \
+arecord -l > $remote_bundle_dir/arecord-l.txt 2>&1 && \
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' > $remote_bundle_dir/docker-ps.txt 2>&1 && \
+docker stats --no-stream > $remote_bundle_dir/docker-stats.txt 2>&1 && \
+docker logs --tail 300 homeassistant > $remote_bundle_dir/homeassistant.log 2>&1 && \
+docker inspect homeassistant > $remote_bundle_dir/homeassistant.inspect.json 2>&1 && \
+systemctl status ssh --no-pager -l > $remote_bundle_dir/ssh.status.txt 2>&1 && \
+systemctl status wyoming-satellite.service --no-pager -l > $remote_bundle_dir/wyoming-satellite.status.txt 2>&1 && \
+systemctl is-active wyoming-satellite.service > $remote_bundle_dir/wyoming-satellite.is-active.txt 2>&1 && \
+systemctl is-enabled wyoming-satellite.service > $remote_bundle_dir/wyoming-satellite.is-enabled.txt 2>&1 && \
+sudo journalctl -u wyoming-satellite.service -n 300 --no-pager > $remote_bundle_dir/wyoming-satellite.log 2>&1 && \
+sudo dmesg -T | tail -n 300 > $remote_bundle_dir/dmesg-tail.log 2>&1 && \
+sudo dmesg -T | grep -Ei 'usb|under.?voltage|thrott|reset|disconnect|xhci|urb' | tail -n 200 > $remote_bundle_dir/dmesg-usb.log 2>&1 && \
+systemctl cat wyoming-satellite.service > $remote_bundle_dir/wyoming-satellite.unit.txt 2>&1 && \
+ls -l $remote_bridge_dir/voice_services/run_wyoming_satellite.sh > $remote_bundle_dir/run_wyoming_satellite.ls.txt 2>&1 && \
+ls -l $remote_bridge_dir/voice_services/respeaker_lite_satellite.env > $remote_bundle_dir/respeaker_env.ls.txt 2>&1 && \
+docker cp homeassistant:/config/configuration.yaml $remote_bundle_dir/ha-config/configuration.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/automations.yaml $remote_bundle_dir/ha-config/automations.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/input_booleans.yaml $remote_bundle_dir/ha-config/input_booleans.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/intent_scripts.yaml $remote_bundle_dir/ha-config/intent_scripts.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/lights.yaml $remote_bundle_dir/ha-config/lights.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/rest.yaml $remote_bundle_dir/ha-config/rest.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/rest_commands.yaml $remote_bundle_dir/ha-config/rest_commands.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/scenes.yaml $remote_bundle_dir/ha-config/scenes.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/scripts.yaml $remote_bundle_dir/ha-config/scripts.yaml > /dev/null 2>&1 || true && \
+docker cp homeassistant:/config/custom_sentences/en/fast_commands.yaml $remote_bundle_dir/ha-config/custom_sentences/en/fast_commands.yaml > /dev/null 2>&1 || true"
+
+run_with_password $password [concat [list ssh] $ssh_options [list $remote $collect_cmd]]
+run_with_password $password [list rsync -av -e "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8" "$remote:$remote_bundle_dir/" "$local_debug_dir/"]

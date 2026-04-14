@@ -16,6 +16,7 @@ class SettingsVoiceModelTests(unittest.TestCase):
             "ALLOWED_SCENES": "",
             "ALLOWED_SCRIPTS": "",
             "IGNORED_ENTITIES": "",
+            "HEALTH_MONITORED_ENTITIES": "",
             "TARGET_OVERRIDES_JSON": "{}",
         }
         base.update(overrides)
@@ -103,6 +104,16 @@ class SettingsVoiceModelTests(unittest.TestCase):
                 settings.target_overrides["switch.cafetera"]["aliases"],
                 ["coffee machine"],
             )
+
+    def test_health_monitored_entities_are_split_from_csv(self):
+        settings = self._build_settings(
+            HEALTH_MONITORED_ENTITIES="light.room, light.studio ,binary_sensor.front_door",
+        )
+
+        self.assertEqual(
+            settings.health_monitored_entities,
+            ["light.room", "light.studio", "binary_sensor.front_door"],
+        )
 
 
 if __name__ == "__main__":

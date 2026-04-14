@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -19,38 +21,66 @@ class HomeAssistantClient:
     def __init__(self, settings: Settings):
         self._base_url = settings.home_assistant_url.rstrip("/")
         self._timeout = settings.request_timeout_seconds
+        self._state_cache_ttl = max(0.0, float(settings.home_assistant_state_cache_ttl_seconds))
         self._headers = {
             "Authorization": f"Bearer {settings.home_assistant_token}",
             "Content-Type": "application/json",
         }
+        self._client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
+        self._state_cache: tuple[float, list[dict[str, Any]]] | None = None
+
+    async def start(self) -> None:
+        await self._get_client()
+
+    async def stop(self) -> None:
+        async with self._client_lock:
+            client = self._client
+            self._client = None
+        if client is not None:
+            await client.aclose()
 
     async def get_states(self) -> list[dict[str, Any]]:
+        cached_states = self._get_cached_states()
+        if cached_states is not None:
+            return cached_states
+
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-                response = await client.get(f"{self._base_url}/api/states")
-                response.raise_for_status()
-                return response.json()
+            client = await self._get_client()
+            response = await client.get(f"{self._base_url}/api/states")
+            response.raise_for_status()
+            states = response.json()
+            if isinstance(states, list):
+                self._set_cached_states(states)
+                return states
+            return []
         except httpx.HTTPError as exc:
             raise UpstreamServiceError(f"Failed to fetch Home Assistant states: {exc}") from exc
 
     async def get_state(self, entity_id: str) -> dict[str, Any]:
+        cached_states = self._get_cached_states()
+        if cached_states is not None:
+            for state in cached_states:
+                if state.get("entity_id") == entity_id:
+                    return state
+
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-                response = await client.get(f"{self._base_url}/api/states/{entity_id}")
-                response.raise_for_status()
-                return response.json()
+            client = await self._get_client()
+            response = await client.get(f"{self._base_url}/api/states/{entity_id}")
+            response.raise_for_status()
+            return response.json()
         except httpx.HTTPError as exc:
             raise UpstreamServiceError(f"Failed to fetch entity state for {entity_id}: {exc}") from exc
 
     async def get_weather_forecast(self, entity_id: str, forecast_type: str) -> list[dict[str, Any]]:
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-                response = await client.post(
-                    f"{self._base_url}/api/services/weather/get_forecasts?return_response",
-                    json={"entity_id": entity_id, "type": forecast_type},
-                )
-                response.raise_for_status()
-                payload = response.json()
+            client = await self._get_client()
+            response = await client.post(
+                f"{self._base_url}/api/services/weather/get_forecasts?return_response",
+                json={"entity_id": entity_id, "type": forecast_type},
+            )
+            response.raise_for_status()
+            payload = response.json()
         except httpx.HTTPError as exc:
             raise UpstreamServiceError(
                 f"Failed to fetch {forecast_type} forecast for {entity_id}: {exc}"
@@ -66,6 +96,71 @@ class HomeAssistantClient:
 
         forecast = forecast_payload.get("forecast")
         return forecast if isinstance(forecast, list) else []
+
+    async def build_health_snapshot(self, monitored_entities: list[str] | None = None) -> dict[str, Any]:
+        started_at = time.perf_counter()
+        monitored_entities = monitored_entities or []
+
+        try:
+            states = await self.get_states()
+        except UpstreamServiceError as exc:
+            return {
+                "reachable": False,
+                "error": str(exc),
+                "response_ms": round((time.perf_counter() - started_at) * 1000),
+                "state_count": 0,
+                "monitored_entities": [
+                    {
+                        "entity_id": entity_id,
+                        "status": "unknown",
+                    }
+                    for entity_id in monitored_entities
+                ],
+            }
+
+        states_by_entity_id = {
+            state.get("entity_id"): state
+            for state in states
+            if isinstance(state.get("entity_id"), str)
+        }
+
+        monitored_payload: list[dict[str, Any]] = []
+        degraded_entity_count = 0
+        for entity_id in monitored_entities:
+            state = states_by_entity_id.get(entity_id)
+            if not isinstance(state, dict):
+                degraded_entity_count += 1
+                monitored_payload.append(
+                    {
+                        "entity_id": entity_id,
+                        "status": "missing",
+                    }
+                )
+                continue
+
+            raw_state = str(state.get("state", "unknown"))
+            entity_status = "ok"
+            if raw_state in {"unknown", "unavailable"}:
+                entity_status = "degraded"
+                degraded_entity_count += 1
+
+            attributes = state.get("attributes", {})
+            monitored_payload.append(
+                {
+                    "entity_id": entity_id,
+                    "status": entity_status,
+                    "state": raw_state,
+                    "friendly_name": attributes.get("friendly_name"),
+                }
+            )
+
+        return {
+            "reachable": True,
+            "response_ms": round((time.perf_counter() - started_at) * 1000),
+            "state_count": len(states),
+            "degraded_entity_count": degraded_entity_count,
+            "monitored_entities": monitored_payload,
+        }
 
     async def execute_intent(self, intent: Intent) -> dict[str, Any]:
         if intent.action == "get_state":
@@ -103,17 +198,18 @@ class HomeAssistantClient:
         payload = {"entity_id": intent.target, **intent.parameters}
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-                response = await client.post(
-                    f"{self._base_url}/api/services/{domain}/{service}",
-                    json=payload,
-                )
-                response.raise_for_status()
-                return {
-                    "service": f"{domain}.{service}",
-                    "target": {"entity_id": intent.target},
-                    "response": response.json(),
-                }
+            client = await self._get_client()
+            response = await client.post(
+                f"{self._base_url}/api/services/{domain}/{service}",
+                json=payload,
+            )
+            response.raise_for_status()
+            self._clear_state_cache()
+            return {
+                "service": f"{domain}.{service}",
+                "target": {"entity_id": intent.target},
+                "response": response.json(),
+            }
         except httpx.HTTPError as exc:
             raise UpstreamServiceError(f"Failed to execute Home Assistant service {domain}.{service}: {exc}") from exc
 
@@ -216,3 +312,30 @@ class HomeAssistantClient:
         except TypeError:
             parameters = str(sorted(intent.parameters.items()))
         return f"{intent.action}:{parameters}"
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is not None:
+            return self._client
+
+        async with self._client_lock:
+            if self._client is None:
+                self._client = httpx.AsyncClient(timeout=self._timeout, headers=self._headers)
+            return self._client
+
+    def _get_cached_states(self) -> list[dict[str, Any]] | None:
+        if self._state_cache is None or self._state_cache_ttl <= 0:
+            return None
+
+        cached_at, states = self._state_cache
+        if time.perf_counter() - cached_at > self._state_cache_ttl:
+            self._state_cache = None
+            return None
+        return states
+
+    def _set_cached_states(self, states: list[dict[str, Any]]) -> None:
+        if self._state_cache_ttl <= 0:
+            return
+        self._state_cache = (time.perf_counter(), states)
+
+    def _clear_state_cache(self) -> None:
+        self._state_cache = None

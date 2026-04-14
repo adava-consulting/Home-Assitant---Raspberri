@@ -4,9 +4,11 @@ import logging
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 
+from app.auth import request_has_valid_bridge_access
 from app.config import Settings, get_settings
 from app.audio_output import AudioOutputService
 from app.errors import BridgeError, UpstreamServiceError, ValidationError
+from app.health import build_health_payload
 from app.home_assistant import HomeAssistantClient
 from app.interpreter_factory import build_interpreter
 from app.models import (
@@ -34,7 +36,20 @@ def _configure_logging(settings: Settings) -> None:
     )
 
 
-app = FastAPI(title="Home Assistant Command Bridge", version="0.1.0")
+async def require_bridge_auth(request: Request) -> None:
+    settings = getattr(request.app.state, "settings", None) or get_settings()
+    client_host = request.client.host if request.client is not None else None
+    if request_has_valid_bridge_access(settings, request.headers, client_host):
+        return
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+app = FastAPI(
+    title="Home Assistant Command Bridge",
+    version="0.1.0",
+    dependencies=[Depends(require_bridge_auth)],
+)
 
 
 @app.on_event("startup")
@@ -43,6 +58,7 @@ async def startup_event() -> None:
     _configure_logging(settings)
     app.state.settings = settings
     app.state.home_assistant = HomeAssistantClient(settings)
+    await app.state.home_assistant.start()
     app.state.interpreter_bundle = build_interpreter(settings)
     app.state.audio_output = AudioOutputService(settings)
     await app.state.audio_output.start()
@@ -78,6 +94,9 @@ async def shutdown_event() -> None:
     state_memory = getattr(app.state, "state_memory", None)
     if state_memory is not None:
         await state_memory.stop()
+    home_assistant = getattr(app.state, "home_assistant", None)
+    if home_assistant is not None:
+        await home_assistant.stop()
     audio_output = getattr(app.state, "audio_output", None)
     if audio_output is not None:
         await audio_output.stop()
@@ -97,18 +116,17 @@ def get_orchestrator(request: Request) -> CommandOrchestrator:
 
 
 @app.get("/health")
-async def health(request: Request) -> dict[str, str]:
+async def health(request: Request) -> dict[str, object]:
     interpreter_bundle = request.app.state.interpreter_bundle
-    scheduler = request.app.state.scheduler
-    routines = request.app.state.routines
-    saved_scenes = request.app.state.saved_scenes
-    return {
-        "status": "ok",
-        "interpreter": interpreter_bundle.name,
-        "scheduled_jobs": str(scheduler.pending_count),
-        "routines": str(routines.enabled_count),
-        "saved_scenes": str(saved_scenes.active_count),
-    }
+    return await build_health_payload(
+        settings=request.app.state.settings,
+        interpreter_name=interpreter_bundle.name,
+        scheduler=request.app.state.scheduler,
+        routines=request.app.state.routines,
+        saved_scenes=request.app.state.saved_scenes,
+        home_assistant=request.app.state.home_assistant,
+        audio_output=request.app.state.audio_output,
+    )
 
 
 @app.post("/commands/interpret", response_model=CommandResponse)
@@ -244,7 +262,7 @@ async def activate_saved_scene(scene_id: str, request: Request) -> CommandRespon
         raise HTTPException(status_code=409, detail=message) from exc
 
     orchestrator = get_orchestrator(request)
-    return await orchestrator.process(scene.name, dry_run=False)
+    return await orchestrator.activate_saved_scene(scene, text=scene.name, dry_run=False)
 
 
 @app.delete("/saved-scenes/{scene_id}", response_model=SavedSceneResponse)

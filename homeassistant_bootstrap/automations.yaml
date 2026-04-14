@@ -1,10 +1,10 @@
 - id: assist_bridge_command
   alias: Assist Bridge Command
-  description: Forwards all Assist text commands to the local backend.
+  description: Forwards only explicitly prefixed open-ended requests to the local backend.
   triggers:
     - trigger: conversation
       command:
-        - "{command_text}"
+        - "claude {command_text}"
   actions:
     - variables:
         command_text: "{{ trigger.slots.command_text }}"

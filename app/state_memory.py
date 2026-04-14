@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +10,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 
 from app.models import ActionPlan, Intent
+from app.persistence import load_json_file_with_backup, write_json_file_atomic
 
 
 logger = logging.getLogger(__name__)
@@ -301,23 +301,27 @@ class PreviousStateMemoryService:
         return []
 
     async def _load_records(self) -> None:
-        if not self._store_path.exists():
+        data = await asyncio.to_thread(
+            load_json_file_with_backup,
+            self._store_path,
+            [],
+            logger=logger,
+            label="Previous state store",
+        )
+        if not isinstance(data, list):
+            logger.warning("Previous state store payload was not a list. Ignoring it.")
             return
 
-        payload = await asyncio.to_thread(self._store_path.read_text, "utf-8")
-        if not payload.strip():
-            return
-
-        data = json.loads(payload)
-        self._records = {
-            record_data["target"]: PreviousStateRecord.model_validate(record_data)
-            for record_data in data
-        }
+        records: dict[str, PreviousStateRecord] = {}
+        for record_data in data:
+            try:
+                record = PreviousStateRecord.model_validate(record_data)
+            except Exception as exc:
+                logger.warning("Skipping invalid previous state record: %s", exc)
+                continue
+            records[record.target] = record
+        self._records = records
 
     async def _save_records(self) -> None:
-        serialized = json.dumps(
-            [record.model_dump(mode="json") for record in self._records.values()],
-            ensure_ascii=True,
-            indent=2,
-        )
-        await asyncio.to_thread(self._store_path.write_text, serialized, "utf-8")
+        payload = [record.model_dump(mode="json") for record in self._records.values()]
+        await asyncio.to_thread(write_json_file_atomic, self._store_path, payload)

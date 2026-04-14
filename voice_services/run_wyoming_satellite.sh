@@ -14,7 +14,7 @@ fi
 : "${WYOMING_SATELLITE_DIR:=/opt/wyoming-satellite}"
 : "${WAKE_URI:=tcp://127.0.0.1:10400}"
 : "${WAKE_WORD_NAME:=hey_jarvis}"
-: "${WAKE_REFRACTORY_SECONDS:=5}"
+: "${WAKE_REFRACTORY_SECONDS:=2}"
 : "${MIC_DEVICE_HINT:=ReSpeaker Lite}"
 : "${SND_DEVICE_HINT:=ReSpeaker Lite}"
 : "${MIC_AUTO_GAIN:=5}"
@@ -24,12 +24,17 @@ fi
 : "${MIC_CHANNEL_INDEX:=}"
 : "${MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV:=0.5}"
 : "${SND_VOLUME_MULTIPLIER:=1.0}"
+: "${SND_MIXER_CARD:=}"
+: "${SND_MIXER_CONTROL:=}"
+: "${SND_MIXER_LEVEL:=}"
 : "${SATELLITE_AWAKE_WAV:=}"
 : "${SATELLITE_DONE_WAV:=}"
 : "${SATELLITE_TIMER_FINISHED_WAV:=}"
 : "${SATELLITE_DEBUG_RECORDING_DIR:=}"
 : "${SATELLITE_STREAMING_TIMEOUT_SECONDS:=20}"
 : "${SATELLITE_WATCHDOG_STATE_FILE:=/tmp/wyoming-satellite-watchdog.state}"
+: "${SATELLITE_NO_SPEECH_TIMEOUT_SECONDS:=0}"
+: "${SATELLITE_NO_SPEECH_STATE_FILE:=/tmp/wyoming-satellite-no-speech.state}"
 : "${SATELLITE_WAIT_FOR_DEVICE_SECONDS:=5}"
 : "${SATELLITE_DEBUG:=0}"
 
@@ -95,6 +100,23 @@ wait_for_device() {
   done
 }
 
+configure_playback_mixer() {
+  if [[ -z "$SND_MIXER_CARD" ]] || [[ -z "$SND_MIXER_CONTROL" ]] || [[ -z "$SND_MIXER_LEVEL" ]]; then
+    return 0
+  fi
+
+  if ! command -v amixer >/dev/null 2>&1; then
+    echo "amixer not found; skipping playback mixer configuration" >&2
+    return 0
+  fi
+
+  if amixer -c "$SND_MIXER_CARD" sset "$SND_MIXER_CONTROL" "$SND_MIXER_LEVEL" unmute >/dev/null 2>&1; then
+    echo "Configured playback mixer: card=$SND_MIXER_CARD control=$SND_MIXER_CONTROL level=$SND_MIXER_LEVEL"
+  else
+    echo "Failed to configure playback mixer: card=$SND_MIXER_CARD control=$SND_MIXER_CONTROL level=$SND_MIXER_LEVEL" >&2
+  fi
+}
+
 if [[ ! -x "$WYOMING_SATELLITE_DIR/script/run" ]]; then
   echo "wyoming-satellite launcher not found at $WYOMING_SATELLITE_DIR/script/run" >&2
   exit 1
@@ -109,6 +131,8 @@ else
   echo "Detected speaker device: $SND_DEVICE"
 fi
 
+configure_playback_mixer
+
 DEBUG_ARGS=()
 if [[ "$SATELLITE_DEBUG" == "1" ]]; then
   DEBUG_ARGS+=(--debug)
@@ -116,12 +140,20 @@ fi
 
 OPTIONAL_ARGS=()
 WATCHDOG_HOOK_SCRIPT="$SCRIPT_DIR/satellite_watchdog_hook.sh"
-if [[ "${SATELLITE_STREAMING_TIMEOUT_SECONDS}" != "0" ]] && [[ -x "$WATCHDOG_HOOK_SCRIPT" ]]; then
-  rm -f "$SATELLITE_WATCHDOG_STATE_FILE"
+if [[ -x "$WATCHDOG_HOOK_SCRIPT" ]]; then
   OPTIONAL_ARGS+=(--streaming-start-command "$WATCHDOG_HOOK_SCRIPT streaming_start")
   OPTIONAL_ARGS+=(--streaming-stop-command "$WATCHDOG_HOOK_SCRIPT streaming_stop")
+  OPTIONAL_ARGS+=(--detection-command "$WATCHDOG_HOOK_SCRIPT detection")
   OPTIONAL_ARGS+=(--transcript-command "$WATCHDOG_HOOK_SCRIPT transcript")
+  OPTIONAL_ARGS+=(--stt-start-command "$WATCHDOG_HOOK_SCRIPT stt_start")
+  OPTIONAL_ARGS+=(--stt-stop-command "$WATCHDOG_HOOK_SCRIPT stt_stop")
   OPTIONAL_ARGS+=(--error-command "$WATCHDOG_HOOK_SCRIPT error")
+fi
+if [[ "${SATELLITE_STREAMING_TIMEOUT_SECONDS}" != "0" ]]; then
+  rm -f "$SATELLITE_WATCHDOG_STATE_FILE"
+fi
+if [[ "${SATELLITE_NO_SPEECH_TIMEOUT_SECONDS}" != "0" ]]; then
+  rm -f "$SATELLITE_NO_SPEECH_STATE_FILE"
 fi
 if [[ -n "$WAKE_URI" ]]; then
   OPTIONAL_ARGS+=(--wake-uri "$WAKE_URI")

@@ -10,6 +10,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     home_assistant_url: str = Field(..., alias="HOME_ASSISTANT_URL")
     home_assistant_token: str = Field(..., alias="HOME_ASSISTANT_TOKEN")
+    home_assistant_state_cache_ttl_seconds: float = Field(
+        0.0,
+        alias="HOME_ASSISTANT_STATE_CACHE_TTL_SECONDS",
+    )
+    command_bridge_api_token: str = Field("", alias="COMMAND_BRIDGE_API_TOKEN")
+    command_bridge_api_header_name: str = Field(
+        "X-Bridge-Token",
+        alias="COMMAND_BRIDGE_API_HEADER_NAME",
+    )
     interpreter_mode: str = Field("local_rules", alias="INTERPRETER_MODE")
     anthropic_api_key: str = Field("", alias="ANTHROPIC_API_KEY")
     anthropic_model: str = Field("claude-sonnet-4-20250514", alias="ANTHROPIC_MODEL")
@@ -75,6 +84,7 @@ class Settings(BaseSettings):
     allowed_scripts_raw: str = Field("", alias="ALLOWED_SCRIPTS")
     voice_model_file: str = Field("", alias="VOICE_MODEL_FILE")
     target_overrides_raw: str = Field("{}", alias="TARGET_OVERRIDES_JSON")
+    health_monitored_entities_raw: str = Field("", alias="HEALTH_MONITORED_ENTITIES")
     request_timeout_seconds: float = Field(20.0, alias="REQUEST_TIMEOUT_SECONDS")
     audio_response_enabled: bool = Field(False, alias="AUDIO_RESPONSE_ENABLED")
     audio_response_engine: str = Field("auto", alias="AUDIO_RESPONSE_ENGINE")
@@ -89,6 +99,10 @@ class Settings(BaseSettings):
     audio_response_fast_ack_for_local: bool = Field(
         True,
         alias="AUDIO_RESPONSE_FAST_ACK_FOR_LOCAL",
+    )
+    audio_response_local_ack_mode: str = Field(
+        "descriptive",
+        alias="AUDIO_RESPONSE_LOCAL_ACK_MODE",
     )
     audio_response_fast_ack_text: str = Field("Done.", alias="AUDIO_RESPONSE_FAST_ACK_TEXT")
     kokoro_model_path: str = Field("", alias="KOKORO_MODEL_PATH")
@@ -213,6 +227,14 @@ Settings.ignored_entities = ignored_entities
 
 
 @property
+def health_monitored_entities(self: Settings) -> list[str]:
+    return _split_csv(self.health_monitored_entities_raw)
+
+
+Settings.health_monitored_entities = health_monitored_entities
+
+
+@property
 def voice_model(self: Settings) -> dict[str, object]:
     return _load_json_file(self.voice_model_file)
 
@@ -268,6 +290,14 @@ def normalized_interpreter_mode(self: Settings) -> str:
 
 
 Settings.normalized_interpreter_mode = normalized_interpreter_mode
+
+
+@property
+def bridge_auth_enabled(self: Settings) -> bool:
+    return bool(self.command_bridge_api_token.strip())
+
+
+Settings.bridge_auth_enabled = bridge_auth_enabled
 
 
 @property

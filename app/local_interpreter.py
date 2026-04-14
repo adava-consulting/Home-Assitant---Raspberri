@@ -58,11 +58,48 @@ UNSUPPORTED_LIGHT_MODIFIER_PATTERNS = (
     re.compile(r"\b\d{1,3}\s*(?:%|percent|per cent)\b"),
 )
 
+LEADING_FILLER_PATTERNS = (
+    re.compile(r"^(?:hey|okay|ok)\s+(?:jarvis|nabu)\s+"),
+    re.compile(r"^(?:please\s+)?(?:can|could|would|will)\s+you\s+(?:please\s+)?"),
+    re.compile(r"^i\s+(?:need|want)\s+you\s+to\s+"),
+    re.compile(r"^i\s+would\s+like\s+you\s+to\s+"),
+    re.compile(r"^please\s+"),
+)
+
+TRAILING_FILLER_PATTERNS = (
+    re.compile(r"\s+please$"),
+    re.compile(r"\s+for\s+me$"),
+)
+
+BRIGHTNESS_KEYWORD_VALUES: tuple[tuple[re.Pattern[str], int], ...] = (
+    (re.compile(r"\b(?:low|minimum|min)\s+(?:brightness|intensity)\b"), 25),
+    (re.compile(r"\b(?:medium|mid|half)\s+(?:brightness|intensity)\b"), 50),
+    (re.compile(r"\b(?:high)\s+(?:brightness|intensity)\b"), 75),
+    (re.compile(r"\b(?:full|maximum|max)\s+(?:brightness|intensity)\b"), 100),
+)
+
 
 def _normalize(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text.lower())
     normalized = "".join(char for char in normalized if not unicodedata.combining(char))
-    return re.sub(r"[^a-z0-9\s]", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    updated = normalized
+    while True:
+        previous = updated
+        for pattern in LEADING_FILLER_PATTERNS:
+            updated = pattern.sub("", updated).strip()
+        if updated == previous:
+            break
+
+    for pattern in TRAILING_FILLER_PATTERNS:
+        updated = pattern.sub("", updated).strip()
+
+    updated = re.sub(r"\ball\s+of\s+(?:the\s+)?lights\b", "all lights", updated)
+    updated = re.sub(r"\bthe\s+all\s+lights\b", "all lights", updated)
+    updated = re.sub(r"\s+", " ", updated).strip()
+    return updated
 
 
 def _contains_phrase(text: str, phrase: str) -> bool:
@@ -75,12 +112,18 @@ class LocalInterpreter:
 
     def __init__(self, settings):
         self._settings = settings
+        self._active_context_states: dict[str, dict] = {}
 
     async def interpret(self, text: str, context: ClaudeContext) -> ActionPlan:
         normalized = _normalize(text)
         schedule = self._extract_schedule(normalized)
         if schedule is not None:
             normalized = self._remove_schedule_phrase(normalized)
+        self._active_context_states = {
+            state.get("entity_id"): state
+            for state in (getattr(context, "states", []) or [])
+            if isinstance(state.get("entity_id"), str)
+        }
         target_capabilities = self._target_capabilities_from_context(context)
 
         if self._looks_like_recurring_routine_request(normalized):
@@ -250,19 +293,28 @@ class LocalInterpreter:
         return re.sub(r"\s+", " ", updated).strip()
 
     def _extract_action(self, text: str) -> str | None:
-        action_keywords = (
+        direct_action_keywords = (
             ("unlock", ("unlock",)),
             ("lock", ("lock",)),
+            ("turn_off", ("turn off", "switch off", "power off", "shut off", "deactivate", "disable", "apaga", "apague", "apagar")),
+            ("turn_on", ("turn on", "switch on", "power on", "activate", "enable", "prende", "prenda", "prender", "enciende", "encienda", "encender", "cambia", "cambie", "cambiar", "pon", "pone", "poner")),
             ("open_cover", ("open", "raise")),
             ("close_cover", ("close", "shut")),
             ("stop_cover", ("stop", "halt")),
-            ("turn_off", ("turn off", "switch off", "power off", "deactivate", "disable", "apaga", "apague", "apagar")),
-            ("turn_on", ("turn on", "switch on", "power on", "activate", "enable", "prende", "prenda", "prender", "enciende", "encienda", "encender", "cambia", "cambie", "cambiar", "pon", "pone", "poner")),
         )
 
-        for action, keywords in action_keywords:
+        for action, keywords in direct_action_keywords:
             if any(_contains_phrase(text, keyword) for keyword in keywords):
                 return action
+
+        split_action_patterns = (
+            ("turn_off", re.compile(r"\b(?:turn|switch|power)\b(?:\s+\w+){0,5}\s+\boff\b")),
+            ("turn_on", re.compile(r"\b(?:turn|switch|power)\b(?:\s+\w+){0,5}\s+\bon\b")),
+        )
+        for action, pattern in split_action_patterns:
+            if pattern.search(text):
+                return action
+
         return None
 
     def _looks_like_recurring_routine_request(self, text: str) -> bool:
@@ -310,6 +362,7 @@ class LocalInterpreter:
 
     def _looks_like_all_home_lights(self, text: str) -> bool:
         patterns = (
+            r"\b(?:turn|switch|power|shut)\s+(?:on|off)\s+all\s+lights\b",
             r"\ball\s+(?:the\s+)?(?:house|home)?\s*lights\b",
             r"\bevery\s+light\b",
             r"\blights\s+(?:in|of)\s+(?:the\s+)?(?:house|home)\b",
@@ -323,6 +376,7 @@ class LocalInterpreter:
     def _looks_like_generic_lights_request(self, text: str) -> bool:
         patterns = (
             r"\b(?:turn|switch|power)\s+(?:on|off)\s+(?:the\s+)?lights\b",
+            r"\b(?:shut)\s+off\s+(?:the\s+)?lights\b",
             r"\blights\s+(?:on|off)\b",
             r"\b(?:turn|switch|power)\s+(?:the\s+)?lights\s+(?:on|off)\b",
         )
@@ -369,6 +423,8 @@ class LocalInterpreter:
             entity_id = state.get("entity_id")
             if entity_id not in light_targets:
                 continue
+            if not self._is_target_available(entity_id, self._active_context_states):
+                continue
             members = state.get("attributes", {}).get("entity_id")
             if not isinstance(members, list) or not members:
                 continue
@@ -378,19 +434,24 @@ class LocalInterpreter:
         standalone_targets = [
             target_id
             for target_id in light_targets
+            if self._is_target_available(target_id, self._active_context_states)
             if target_id not in member_targets and target_id not in group_targets
         ]
         return sorted(set(group_targets + standalone_targets))
 
     def _extract_brightness_pct(self, text: str) -> int | None:
         match = re.search(r"\b(\d{1,3})\s*(?:%|percent|per cent)\b", text)
-        if not match:
-            return None
+        if match:
+            value = int(match.group(1))
+            if value < 0 or value > 100:
+                return None
+            return value
 
-        value = int(match.group(1))
-        if value < 0 or value > 100:
-            return None
-        return value
+        for pattern, value in BRIGHTNESS_KEYWORD_VALUES:
+            if pattern.search(text):
+                return value
+
+        return None
 
     def _has_unsupported_light_modifier(self, text: str) -> bool:
         return any(pattern.search(text) for pattern in UNSUPPORTED_LIGHT_MODIFIER_PATTERNS)
@@ -533,7 +594,7 @@ class LocalInterpreter:
         domain: str | None = None,
     ) -> str | None:
         best_target: str | None = None
-        best_match_length = 0
+        best_score = (-1, 0)
 
         for target_id, capabilities in target_capabilities.items():
             if domain is not None and capabilities.domain != domain:
@@ -546,11 +607,28 @@ class LocalInterpreter:
                 continue
 
             match_length = max(len(keyword) for keyword in matches)
-            if match_length > best_match_length:
+            availability_score = 1 if self._is_target_available(target_id, self._active_context_states) else 0
+            candidate_score = (availability_score, match_length)
+            if candidate_score > best_score:
                 best_target = target_id
-                best_match_length = match_length
+                best_score = candidate_score
 
         return best_target
+
+    def _is_target_available(
+        self,
+        target_id: str,
+        states_by_entity_id: dict[str, dict] | None,
+    ) -> bool:
+        if not states_by_entity_id:
+            return True
+
+        state = states_by_entity_id.get(target_id)
+        if not isinstance(state, dict):
+            return True
+
+        raw_state = str(state.get("state", "")).strip().lower()
+        return raw_state not in {"unavailable", "unknown"}
 
     def _matching_keywords(
         self,

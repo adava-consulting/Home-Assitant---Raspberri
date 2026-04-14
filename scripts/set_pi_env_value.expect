@@ -1,0 +1,35 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+
+if {$argc != 5} {
+  puts stderr "usage: set_pi_env_value.expect <password> <host> <remote_dir> <key> <value>"
+  exit 1
+}
+
+set password [lindex $argv 0]
+set host [lindex $argv 1]
+set remote_dir [lindex $argv 2]
+set key [lindex $argv 3]
+set value [lindex $argv 4]
+set remote "lucas@$host"
+
+proc run_with_password {password command_args} {
+  spawn {*}$command_args
+  expect {
+    -re "(?i)password:" {
+      send "$password\r"
+      exp_continue
+    }
+    eof {}
+  }
+
+  catch wait result
+  set exit_status [lindex $result 3]
+  if {$exit_status != 0} {
+    exit $exit_status
+  }
+}
+
+set remote_cmd "cd $remote_dir && if grep -q '^$key=' .env; then sed -i 's#^$key=.*#$key=$value#' .env; else printf '\\n$key=$value\\n' >> .env; fi && grep '^$key=' .env"
+run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote $remote_cmd]

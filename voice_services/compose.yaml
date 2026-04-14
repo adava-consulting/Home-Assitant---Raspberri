@@ -20,6 +20,17 @@ services:
       - ${WHISPER_MODEL:-base-int8}
       - --language
       - ${WHISPER_LANGUAGE:-en}
+      - --beam-size
+      - ${WHISPER_BEAM_SIZE:-1}
+      - --cpu-threads
+      - ${WHISPER_CPU_THREADS:-4}
+      - --initial-prompt
+      - "${WHISPER_INITIAL_PROMPT:-Turn on the lights. Turn off the lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.}"
+      - --vad-filter
+      - --vad-min-speech-ms
+      - ${WHISPER_VAD_MIN_SPEECH_MS:-200}
+      - --vad-min-silence-ms
+      - ${WHISPER_VAD_MIN_SILENCE_MS:-700}
       - --uri
       - tcp://0.0.0.0:10300
       - --data-dir

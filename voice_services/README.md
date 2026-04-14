@@ -48,8 +48,14 @@ Default language/voice settings are:
 
 - Whisper language: `en`
 - Whisper model: `base-int8`
+- Whisper beam size: `1`
+- Whisper CPU threads: `4`
+- Whisper initial prompt: biased toward common light-control phrases
+- Whisper VAD minimum speech: `200 ms`
+- Whisper VAD minimum silence: `700 ms`
 - Piper voice: `en_US-lessac-medium`
 - Wake word: `hey_jarvis`
+- Wake refractory: `2` seconds for faster re-trigger after short or empty wake-ups
 
 ## Important note about transcription quality
 
@@ -70,6 +76,9 @@ For this repo, the safer first cut is:
 - better audio capture from the ReSpeaker Lite
 - local wake word detection
 - English Whisper for transcription, using at least `base-int8` for better command accuracy
+- lower Whisper beam size for faster decoding on Raspberry Pi CPU
+- a small initial prompt with likely home commands to reduce weird STT substitutions
+- shorter Whisper VAD silence windows so commands close faster after you stop talking
 - Piper for local speech output
 
 If tiny Whisper is still inaccurate after the microphone is tuned, the next step
@@ -132,14 +141,78 @@ If you want a confirmation sound when the satellite starts listening:
 2. Set `SATELLITE_AWAKE_WAV` to a short WAV file, for example:
 3. If the first words of the command get clipped, set `MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0`
    because the beep is going to headphones instead of a speaker in the room.
+4. If the beep is still too quiet, configure the Raspberry headphone mixer too.
 
 ```bash
 SATELLITE_AWAKE_WAV=/home/lucas/ha-command-bridge/voice_services/sounds/listening.wav
 MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0
+SND_MIXER_CARD=Headphones
+SND_MIXER_CONTROL=PCM
+SND_MIXER_LEVEL=100%
 ```
 
 This makes the wake confirmation play through the Raspberry 3.5mm jack instead of
 the ReSpeaker's own playback device.
+
+## Satellite event hooks
+
+The wrapper can now fire a local hook on these phases:
+
+- `detection`
+- `streaming_start`
+- `streaming_stop`
+- `transcript`
+- `error`
+
+The default hook script still maintains the streaming watchdog state, but it can
+also:
+
+- append timestamped events to `SATELLITE_EVENT_LOG_FILE`
+- run one shell command per phase through:
+  - `SATELLITE_ON_DETECTION_COMMAND`
+  - `SATELLITE_ON_STREAMING_START_COMMAND`
+  - `SATELLITE_ON_STREAMING_STOP_COMMAND`
+  - `SATELLITE_ON_TRANSCRIPT_COMMAND`
+  - `SATELLITE_ON_STT_START_COMMAND`
+  - `SATELLITE_ON_STT_STOP_COMMAND`
+  - `SATELLITE_ON_ERROR_COMMAND`
+
+Example:
+
+```bash
+SATELLITE_EVENT_LOG_FILE=/tmp/wyoming-satellite-events.log
+SATELLITE_ON_DETECTION_COMMAND='logger -t wyoming-satellite "wake word detected"'
+SATELLITE_ON_ERROR_COMMAND='logger -t wyoming-satellite "satellite error"'
+```
+
+That gives us a clean place to attach future visual feedback without changing the
+satellite launch command again.
+
+## No-speech timeout after wake word
+
+If `hey_jarvis` is triggered by mistake and the session stays open too long, you
+can force the satellite back to idle quickly:
+
+```bash
+SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=2
+```
+
+With that enabled, the hook script starts a short timer on wake detection. If the
+user does not actually begin speaking before the timeout, the satellite process is
+terminated and systemd brings it back immediately. If `HOME_ASSISTANT_URL` and
+`HOME_ASSISTANT_TOKEN` are available through the project `.env`, the hook also
+nudges `assist_satellite.respeaker_lite` back to `idle` by calling
+`assist_satellite.announce` with an empty message. This keeps the Home Assistant
+entity state closer to the real satellite state during empty wake-ups.
+
+## ReSpeaker Lite RGB note
+
+In the current project layout, the Raspberry is using the ReSpeaker Lite as a USB
+audio device. That path exposes the microphone and speaker, but not an obvious Linux
+LED device for the onboard RGB. If we want Alexa-style RGB feedback on the device
+itself, the practical next step is to drive that LED from the ReSpeaker/XIAO side
+with dedicated firmware or an ESPHome-style integration, and then connect these
+satellite event hooks to it.
 
 ## Streaming safety watchdog
 

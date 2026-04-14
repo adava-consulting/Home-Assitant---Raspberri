@@ -53,6 +53,9 @@ class FakeSettings:
     allowed_scenes = ["scene.movie_time"]
     allowed_scripts = ["script.prepare_bedtime"]
     target_overrides = {}
+    audio_response_fast_ack_for_local = True
+    audio_response_local_ack_mode = "descriptive"
+    audio_response_fast_ack_text = "Done."
 
 
 class FakeHomeAssistantClient:
@@ -190,6 +193,28 @@ def single_action_plan(
 
 
 class CommandOrchestratorTests(unittest.TestCase):
+    def test_local_audio_ack_can_use_generic_fast_confirmation(self):
+        settings = FakeSettings()
+        settings.audio_response_local_ack_mode = "generic"
+        audio_output = FakeAudioOutput()
+        orchestrator = CommandOrchestrator(
+            settings,
+            FakeHomeAssistantClient(),
+            FakeInterpreter(
+                single_action_plan(
+                    "turn_off",
+                    "light.living_room",
+                    rationale="Matched local entity rule.",
+                )
+            ),
+            audio_output=audio_output,
+        )
+
+        response = asyncio.run(orchestrator.process("turn off the living room light", dry_run=False))
+
+        self.assertTrue(response.executed)
+        self.assertEqual(audio_output.messages, ["Done."])
+
     def test_dry_run_does_not_execute(self):
         orchestrator = CommandOrchestrator(
             FakeSettings(),
@@ -426,6 +451,41 @@ class CommandOrchestratorTests(unittest.TestCase):
         self.assertEqual(response.intent.target, "light.living_room")
         self.assertEqual(response.assistant_response, "Okay. I activated Movie mode.")
 
+    def test_activate_saved_scene_by_id_executes_exact_actions(self):
+        saved_scene = SavedSceneResponse(
+            scene_id="scene-123",
+            text="create movie mode",
+            name="Movie mode",
+            aliases=["Movie mode"],
+            actions=[
+                Intent(
+                    action="turn_on",
+                    target="light.living_room",
+                    parameters={"brightness_pct": 40},
+                )
+            ],
+            created_at="2026-04-07T12:00:00-03:00",
+            updated_at="2026-04-07T12:00:00-03:00",
+            status="active",
+        )
+        orchestrator = CommandOrchestrator(
+            FakeSettings(),
+            FakeHomeAssistantClient(),
+            FakeInterpreter(single_action_plan("turn_on", "light.kitchen")),
+            scheduler=FakeScheduler(),
+            routines=FakeRoutines(),
+            saved_scenes=FakeSavedScenes(),
+        )
+
+        response = asyncio.run(
+            orchestrator.activate_saved_scene(saved_scene, text="Movie mode", dry_run=False)
+        )
+
+        self.assertTrue(response.executed)
+        self.assertEqual(response.intent.target, "light.living_room")
+        self.assertEqual(response.saved_scene_id, "scene-123")
+        self.assertEqual(response.assistant_response, "Okay. I activated Movie mode.")
+
     def test_rejects_high_security_saved_scene(self):
         settings = FakeSettings()
         settings.allowed_entities = ["lock.front_door"]
@@ -589,6 +649,34 @@ class CommandOrchestratorTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             asyncio.run(orchestrator.process("turn on the bad light", dry_run=True))
+
+    def test_effective_target_capabilities_filter_out_unavailable_allowed_entities(self):
+        settings = FakeSettings()
+        settings.allowed_entities = ["light.room", "light.studio"]
+        orchestrator = CommandOrchestrator(
+            settings,
+            FakeHomeAssistantClient(),
+            FakeInterpreter(single_action_plan("turn_on", "light.studio")),
+            scheduler=FakeScheduler(),
+        )
+
+        target_capabilities = orchestrator._build_effective_target_capabilities(
+            [
+                {
+                    "entity_id": "light.room",
+                    "state": "unavailable",
+                    "attributes": {"friendly_name": "Room"},
+                },
+                {
+                    "entity_id": "light.studio",
+                    "state": "on",
+                    "attributes": {"friendly_name": "Studio"},
+                },
+            ]
+        )
+
+        self.assertNotIn("light.room", target_capabilities)
+        self.assertIn("light.studio", target_capabilities)
 
     def test_context_includes_previous_states(self):
         interpreter = ContextCapturingInterpreter(single_action_plan("turn_on", "light.living_room"))
@@ -1170,6 +1258,176 @@ class InterpreterFactoryTests(unittest.TestCase):
         self.assertEqual(plan.primary_intent.target, "light.office")
         self.assertEqual(plan.primary_intent.parameters, {"brightness_pct": 50})
 
+    def test_local_interpreter_strips_wake_word_and_polite_filler(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room", "light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room", "light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "states": [
+                    {
+                        "entity_id": "light.room",
+                        "state": "off",
+                        "attributes": {"entity_id": ["light.lamp_post_1", "light.lampara_a60_e27_smart_baw_9"]},
+                    },
+                    {
+                        "entity_id": "light.studio",
+                        "state": "off",
+                        "attributes": {"entity_id": ["light.recording_studio_door_garden", "light.led_bulb_w509z2"]},
+                    },
+                ],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("hey jarvis could you please shut off all of the lights for me", context))
+
+        self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
+        self.assertTrue(all(intent.action == "turn_off" for intent in plan.actions))
+
+    def test_local_interpreter_skips_unavailable_lights_for_generic_all_lights_request(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room", "light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room", "light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "states": [
+                    {
+                        "entity_id": "light.room",
+                        "state": "unavailable",
+                        "attributes": {},
+                    },
+                    {
+                        "entity_id": "light.studio",
+                        "state": "off",
+                        "attributes": {"entity_id": ["light.recording_studio_door_garden", "light.led_bulb_w509z2"]},
+                    },
+                ],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("turn off all lights", context))
+
+        self.assertEqual([intent.target for intent in plan.actions], ["light.studio"])
+
+    def test_local_interpreter_parses_medium_brightness(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("set the studio lights to medium brightness", context))
+
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.parameters, {"brightness_pct": 50})
+
+    def test_local_interpreter_parses_full_intensity(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("please turn on the room lights at full intensity", context))
+
+        self.assertEqual(plan.primary_intent.target, "light.room")
+        self.assertEqual(plan.primary_intent.parameters, {"brightness_pct": 100})
+
+    def test_local_interpreter_parses_split_turn_off_phrase(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("turn the studio lights off", context))
+
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.action, "turn_off")
+
     def test_build_interpreter_uses_local_rules_when_requested(self):
         bundle = build_interpreter(FakeSettings())
 
@@ -1251,6 +1509,53 @@ class InterpreterFactoryTests(unittest.TestCase):
         )()
 
         plan = asyncio.run(local_first.interpret("turn on the lights", context))
+
+        self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
+        self.assertEqual(primary.calls, 0)
+
+    def test_local_first_interpreter_skips_primary_for_polite_spoken_command(self):
+        primary = CountingInterpreter(single_action_plan("turn_on", "light.kitchen"))
+        local_first = LocalFirstInterpreter(
+            local=LocalInterpreter(FakeSettings()),
+            primary=primary,
+            primary_name="claude_cli",
+        )
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room", "light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room", "light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "states": [
+                    {
+                        "entity_id": "light.room",
+                        "state": "off",
+                        "attributes": {"entity_id": ["light.lamp_post_1", "light.lampara_a60_e27_smart_baw_9"]},
+                    },
+                    {
+                        "entity_id": "light.studio",
+                        "state": "off",
+                        "attributes": {"entity_id": ["light.recording_studio_door_garden", "light.led_bulb_w509z2"]},
+                    },
+                ],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(local_first.interpret("hey jarvis could you please shut off all of the lights for me", context))
 
         self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
         self.assertEqual(primary.calls, 0)

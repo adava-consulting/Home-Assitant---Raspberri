@@ -1,0 +1,17 @@
+BridgeGoodNight:
+  description: Fast local bedtime routine for voice requests such as good night.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Good night.
+  action:
+    - action: script.prepare_bedtime
+
+BridgeGuestMode:
+  description: Fast local guest routine for voice requests such as guest mode or welcome guests.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Guest mode enabled.
+  action:
+    - action: script.welcome_guests

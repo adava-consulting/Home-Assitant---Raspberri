@@ -54,7 +54,9 @@ Important note:
 - this file helps the backend understand spoken names and constrain what it can control
 - it does not replace Home Assistant areas, floors, or aliases configured in the Home Assistant UI
 - for the best Assist performance, keep both aligned
-- in this project, Assist forwards recognized text to the bridge, so many "custom sentence" wins are better modeled here first as aliases and curated allow-lists
+- for the fastest feel, keep both layers aligned:
+  - Home Assistant areas, floors, and `custom_sentences` for closed fast commands
+  - bridge aliases and curated allow-lists for open-ended requests that still need the backend
 
 ## Request Flow
 
@@ -359,6 +361,8 @@ cp .env.example .env
 
 - `HOME_ASSISTANT_URL`
 - `HOME_ASSISTANT_TOKEN`
+- `HOME_ASSISTANT_STATE_CACHE_TTL_SECONDS` if you want a tiny cache window for repeated Home Assistant state reads
+- `COMMAND_BRIDGE_API_TOKEN` if you want to require a shared token for non-local requests
 - `STATE_MEMORY_ENABLED`
 - `AUTO_DISCOVER_ENTITIES`
 - `AUTO_DISCOVER_DOMAINS`
@@ -368,6 +372,10 @@ cp .env.example .env
 - `TARGET_OVERRIDES_JSON` if you want custom aliases, security levels, or per-target action restrictions
 
 `ANTHROPIC_API_KEY` is optional. If it is not configured, the backend can still run with local rules or Claude Code CLI depending on `INTERPRETER_MODE`.
+
+If `COMMAND_BRIDGE_API_TOKEN` is set, the bridge will require that token for non-loopback requests. Local requests from the same machine remain allowed so the Home Assistant bootstrap can keep talking to `127.0.0.1` without extra headers. For remote admin calls, send the token either in `X-Bridge-Token` or as a Bearer token.
+
+`HOME_ASSISTANT_STATE_CACHE_TTL_SECONDS` is optional. A small value such as `0.25` to `0.50` can shave off repeated `/api/states` reads during short bursts without keeping stale state around for long.
 
 When the bridge runs in Docker on the same Raspberry Pi as Home Assistant, a stable
 choice for `HOME_ASSISTANT_URL` is the Docker host gateway:
@@ -485,11 +493,42 @@ Quick health check:
 curl http://127.0.0.1:8000/health
 ```
 
-If no model-backed interpreter is active, you should see:
+If no model-backed interpreter is active, you should still see `status: ok`, but the payload is now more useful:
 
 ```json
-{"status":"ok","interpreter":"local_rules"}
+{
+  "status": "ok",
+  "interpreter": "local_rules",
+  "interpreter_mode": "local_rules",
+  "fast_path_local_first": true,
+  "scheduled_jobs": "0",
+  "routines": "0",
+  "saved_scenes": "0",
+  "voice_model_loaded": false,
+  "home_assistant": {
+    "reachable": true,
+    "response_ms": 42,
+    "state_count": 128,
+    "degraded_entity_count": 0,
+    "monitored_entities": []
+  },
+  "audio_output": {
+    "enabled": false,
+    "preferred_engine": "kokoro",
+    "active_engine": "espeak-ng",
+    "device": "plughw:0,0",
+    "cache_enabled": true
+  }
+}
 ```
+
+For a fixed install, set `HEALTH_MONITORED_ENTITIES` to the room or device entities you care about most, for example:
+
+```bash
+HEALTH_MONITORED_ENTITIES=light.room,light.studio
+```
+
+If one of those entities becomes `unavailable` or disappears, `/health` will return `status: degraded` even if the bridge itself is still running.
 
 ## Running with Docker
 
@@ -649,14 +688,22 @@ You only need code changes when introducing a completely new domain or action fa
 The most stable setup is:
 
 1. Standard smart-home control goes through Home Assistant directly.
-2. More complex commands are forwarded to this backend.
-3. The backend enriches or interprets those requests and calls back into Home Assistant.
+2. Closed fast commands use Home Assistant native intents, areas, and `custom_sentences`.
+3. More complex open-ended requests are forwarded to this backend only when explicitly prefixed.
+4. The backend enriches or interprets those requests and calls back into Home Assistant.
 
-The `homeassistant_bootstrap/automations.yaml` file forwards captured Assist text to the backend with:
+The bootstrap now includes:
 
-- `{command_text}`
+- `homeassistant_bootstrap/automations.yaml`
+  - forwards only `claude {command_text}` requests to the bridge
+- `homeassistant_bootstrap/intent_scripts.yaml`
+  - provides instant local routines such as `good night` and `guest mode`
+- `homeassistant_bootstrap/custom_sentences/en/fast_commands.yaml`
+  - adds extra English sentence coverage for common light and routine phrases
 
-To force the intelligent interpreter instead of local fast-path rules, prefix the request with `claude`.
+This gives a much faster voice path for common household commands because Home Assistant can resolve them locally without waiting on the bridge or Claude.
+
+To use the intelligent interpreter, prefix the request with `claude`.
 
 Examples:
 
@@ -664,6 +711,12 @@ Examples:
 - `claude good morning`
 
 The backend strips the `claude` prefix before sending the request to Claude. This escape hatch intentionally skips local shortcuts, including the weather briefing shortcut, and does not fall back to local rules if Claude is unavailable.
+
+Recommended practical split:
+
+- say normal device commands naturally and let Home Assistant handle them locally
+- use `claude ...` only for open-ended or descriptive requests
+- keep `VOICE_MODEL_FILE` and Home Assistant area/entity names aligned so both layers hear the same home vocabulary
 
 ## Security
 
@@ -673,6 +726,35 @@ The backend strips the `claude` prefix before sending the request to Claude. Thi
 - Only allowed actions, targets, and parameters are accepted.
 - Ambiguous or unsafe requests are rejected.
 - `dry_run` lets you inspect the intent without touching a device.
+- when `COMMAND_BRIDGE_API_TOKEN` is set, non-local HTTP requests must authenticate before reaching the API
+
+## Backups
+
+The repo now includes a simple backup helper for bridge state and local config:
+
+```bash
+./scripts/backup_bridge_state.sh
+```
+
+By default it backs up:
+
+- project `.env`
+- `voice_model.json` if present
+- `credentials.env` if present
+- `voice_services/.env` if present
+- persisted bridge data under `BRIDGE_DATA_DIR`
+
+By default it skips `audio-cache` so backups stay smaller. To include it:
+
+```bash
+BACKUP_INCLUDE_AUDIO_CACHE=1 ./scripts/backup_bridge_state.sh
+```
+
+You can point it at a different data directory or backup directory with:
+
+```bash
+BRIDGE_DATA_DIR=/some/data/path BACKUP_DIR=/some/backup/path ./scripts/backup_bridge_state.sh
+```
 
 ## Testing
 
@@ -685,5 +767,5 @@ python3 -m compileall app tests
 Unit tests:
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
+./.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 ```

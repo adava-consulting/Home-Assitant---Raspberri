@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.errors import BridgeError
 from app.models import ActionPlan, Intent, ScheduleSpec, ScheduledJobResponse, ScheduledJobStatus
+from app.persistence import load_json_file_with_backup, write_json_file_atomic
 
 
 logger = logging.getLogger(__name__)
@@ -168,26 +168,30 @@ class SchedulerService:
                 await self._save_jobs()
 
     async def _load_jobs(self) -> None:
-        if not self._store_path.exists():
+        data = await asyncio.to_thread(
+            load_json_file_with_backup,
+            self._store_path,
+            [],
+            logger=logger,
+            label="Scheduled job store",
+        )
+        if not isinstance(data, list):
+            logger.warning("Scheduled job store payload was not a list. Ignoring it.")
             return
 
-        payload = await asyncio.to_thread(self._store_path.read_text, "utf-8")
-        if not payload.strip():
-            return
-
-        data = json.loads(payload)
-        self._jobs = {
-            job_data["job_id"]: ScheduledJob.model_validate(job_data)
-            for job_data in data
-        }
+        jobs: dict[str, ScheduledJob] = {}
+        for job_data in data:
+            try:
+                job = ScheduledJob.model_validate(job_data)
+            except Exception as exc:
+                logger.warning("Skipping invalid scheduled job record: %s", exc)
+                continue
+            jobs[job.job_id] = job
+        self._jobs = jobs
 
     async def _save_jobs(self) -> None:
-        serialized = json.dumps(
-            [job.model_dump(mode="json") for job in self._jobs.values()],
-            ensure_ascii=True,
-            indent=2,
-        )
-        await asyncio.to_thread(self._store_path.write_text, serialized, "utf-8")
+        payload = [job.model_dump(mode="json") for job in self._jobs.values()]
+        await asyncio.to_thread(write_json_file_atomic, self._store_path, payload)
 
     def _resolve_due_at(self, schedule: ScheduleSpec, now: datetime) -> datetime:
         if schedule.type == "delay":

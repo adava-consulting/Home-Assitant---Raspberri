@@ -327,7 +327,7 @@ DEFAULT_TARGET_ALIASES: dict[str, set[str]] = {
 }
 
 GROUP_EXPANSION_ACTIONS: dict[str, set[str]] = {
-    "light": {"turn_on"},
+    "light": {"turn_on", "turn_off"},
     "fan": {"set_fan_percentage"},
     "cover": {"set_cover_position"},
     "climate": {"set_temperature", "set_hvac_mode"},
@@ -437,6 +437,8 @@ def should_expand_group_action(target_id: str, action: str, parameters: dict[str
         return False
 
     if domain == "light":
+        if action in {"turn_on", "turn_off"}:
+            return True
         complex_light_keys = {"brightness", "brightness_pct", "rgb_color", "color_temp_kelvin"}
         return bool(complex_light_keys & set(parameters))
 
