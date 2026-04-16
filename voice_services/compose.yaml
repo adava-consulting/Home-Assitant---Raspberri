@@ -8,12 +8,6 @@ services:
       - tcp://0.0.0.0:10400
       - --preload-model
       - ${WAKE_WORD_MODEL:-hey_jarvis}
-      - --threshold
-      - ${WAKE_WORD_THRESHOLD:-0.35}
-      - --trigger-level
-      - ${WAKE_WORD_TRIGGER_LEVEL:-1}
-      - --refractory-seconds
-      - ${WAKE_WORD_REFRACTORY_SECONDS:-1.0}
     ports:
       - "10400:10400"
 

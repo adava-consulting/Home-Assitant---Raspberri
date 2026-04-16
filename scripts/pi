@@ -47,6 +47,7 @@ show_help() {
 Usage:
   ./scripts/pi status
   ./scripts/pi doctor
+  ./scripts/pi wake-debug
   ./scripts/pi ghost-check
   ./scripts/pi voice-check
   ./scripts/pi lights-check
@@ -72,6 +73,7 @@ Usage:
 Examples:
   ./scripts/pi status
   ./scripts/pi doctor
+  ./scripts/pi wake-debug
   ./scripts/pi ghost-check
   ./scripts/pi voice-check
   ./scripts/pi lights-check
@@ -149,6 +151,18 @@ case "$subcommand" in
     run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && grep '^VOICE_MODEL_FILE=' .env || true"
     printf '\n'
     bridge_test "turn the room lights off"
+    ;;
+
+  wake-debug)
+    run_ssh_expect "echo '== containers ==' && docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'"
+    printf '\n'
+    run_ssh_expect_with_sudo "echo '== wyoming satellite ==' && systemctl status wyoming-satellite.service --no-pager -l && echo && echo '== listening ports ==' && ss -ltn | egrep '10200|10300|10400|10700' || true"
+    printf '\n'
+    run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    printf '\n'
+    run_ssh_expect_with_sudo "echo '== satellite journal ==' && journalctl -u wyoming-satellite.service -n 120 --no-pager | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|Event\\(type=.error|No speech detected|stt-no-text-recognized|Waiting for wake word|Connected to server|Connected to wake service|Connected to mic service' || true"
+    printf '\n'
+    run_ssh_expect "echo '== openwakeword logs ==' && docker logs --tail 80 wyoming-openwakeword 2>&1 || true && echo && echo '== whisper logs ==' && docker logs --tail 80 wyoming-whisper 2>&1 || true && echo && echo '== bridge logs ==' && docker logs --tail 80 ha-command-bridge 2>&1 | egrep -i 'interpret|error|traceback|turn on|turn off|all lights|room|studio' || true"
     ;;
 
   ghost-check)
@@ -386,28 +400,16 @@ PY"
 
   satellite-fast)
     voice_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env"
-    wake_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/.env"
     run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
-      if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=1/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=1\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=2/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=2\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=' '${voice_env_file}'; then sed -i \"s/^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=.*/MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0/\" '${voice_env_file}'; else printf '\nMIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
       systemctl restart wyoming-satellite.service; \
       grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS)=' '${voice_env_file}'; \
       echo; systemctl status wyoming-satellite.service --no-pager; \
     else \
       echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
-    fi; \
-    if [ -f '${wake_env_file}' ]; then \
-      if grep -q '^WAKE_WORD_THRESHOLD=' '${wake_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.35/\" '${wake_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.35\n' >> '${wake_env_file}'; fi; \
-      if grep -q '^WAKE_WORD_TRIGGER_LEVEL=' '${wake_env_file}'; then sed -i \"s/^WAKE_WORD_TRIGGER_LEVEL=.*/WAKE_WORD_TRIGGER_LEVEL=1/\" '${wake_env_file}'; else printf '\nWAKE_WORD_TRIGGER_LEVEL=1\n' >> '${wake_env_file}'; fi; \
-      if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${wake_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=1.0/\" '${wake_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=1.0\n' >> '${wake_env_file}'; fi; \
-      if grep -q '^WHISPER_BEAM_SIZE=' '${wake_env_file}'; then sed -i \"s/^WHISPER_BEAM_SIZE=.*/WHISPER_BEAM_SIZE=1/\" '${wake_env_file}'; else printf '\nWHISPER_BEAM_SIZE=1\n' >> '${wake_env_file}'; fi; \
-      if grep -q '^WHISPER_VAD_MIN_SPEECH_MS=' '${wake_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SPEECH_MS=.*/WHISPER_VAD_MIN_SPEECH_MS=200/\" '${wake_env_file}'; else printf '\nWHISPER_VAD_MIN_SPEECH_MS=200\n' >> '${wake_env_file}'; fi; \
-      if grep -q '^WHISPER_VAD_MIN_SILENCE_MS=' '${wake_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SILENCE_MS=.*/WHISPER_VAD_MIN_SILENCE_MS=700/\" '${wake_env_file}'; else printf '\nWHISPER_VAD_MIN_SILENCE_MS=700\n' >> '${wake_env_file}'; fi; \
-      if grep -q '^WHISPER_INITIAL_PROMPT=' '${wake_env_file}'; then sed -i \"s#^WHISPER_INITIAL_PROMPT=.*#WHISPER_INITIAL_PROMPT=Turn on the lights. Turn off the lights. Turn all lights on. Turn all lights off. Turn on the room lights. Turn off the room lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.#\" '${wake_env_file}'; else printf '\nWHISPER_INITIAL_PROMPT=Turn on the lights. Turn off the lights. Turn all lights on. Turn all lights off. Turn on the room lights. Turn off the room lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.\n' >> '${wake_env_file}'; fi; \
-      cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && docker compose up -d openwakeword whisper; \
-      echo; grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS|WHISPER_INITIAL_PROMPT)=' '${wake_env_file}'; \
     fi"
     ;;
 
