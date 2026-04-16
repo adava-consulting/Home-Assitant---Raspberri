@@ -100,6 +100,11 @@ class Settings(BaseSettings):
         True,
         alias="AUDIO_RESPONSE_FAST_ACK_FOR_LOCAL",
     )
+    audio_response_dedupe_window_seconds: float = Field(
+        20.0,
+        alias="AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS",
+    )
+    audio_response_max_chars: int = Field(220, alias="AUDIO_RESPONSE_MAX_CHARS")
     audio_response_local_ack_mode: str = Field(
         "descriptive",
         alias="AUDIO_RESPONSE_LOCAL_ACK_MODE",

@@ -25,7 +25,7 @@ services:
       - --cpu-threads
       - ${WHISPER_CPU_THREADS:-4}
       - --initial-prompt
-      - "${WHISPER_INITIAL_PROMPT:-Turn on the lights. Turn off the lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.}"
+      - "${WHISPER_INITIAL_PROMPT:-Turn on the lights. Turn off the lights. Turn all lights on. Turn all lights off. Turn on the room lights. Turn off the room lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.}"
       - --vad-filter
       - --vad-min-speech-ms
       - ${WHISPER_VAD_MIN_SPEECH_MS:-200}

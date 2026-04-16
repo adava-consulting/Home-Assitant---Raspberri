@@ -9,6 +9,7 @@ from app.capabilities import build_target_capabilities, build_target_capabilitie
 from app.command_routing import extract_forced_claude_request
 from app.errors import ValidationError
 from app.models import ActionPlan, ClaudeContext, CommandResponse, Intent
+from app.voice_safety import sanitize_voice_input
 from app.weather_briefing import WeatherBriefingService
 
 
@@ -40,6 +41,15 @@ class CommandOrchestrator:
         self._weather_briefing = WeatherBriefingService(settings, home_assistant)
 
     async def process(self, text: str, dry_run: bool) -> CommandResponse:
+        try:
+            text = sanitize_voice_input(text)
+        except ValueError as exc:
+            if str(exc) == "repetition_loop":
+                raise ValidationError(
+                    "The spoken command looked corrupted or repeated. Please try again."
+                ) from exc
+            raise
+
         logger.info("Input text: %s", text)
         forced_claude_request = extract_forced_claude_request(text)
         if forced_claude_request is not None:

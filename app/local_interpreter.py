@@ -363,6 +363,7 @@ class LocalInterpreter:
     def _looks_like_all_home_lights(self, text: str) -> bool:
         patterns = (
             r"\b(?:turn|switch|power|shut)\s+(?:on|off)\s+all\s+lights\b",
+            r"\b(?:turn|switch|power|shut)\s+all\s+lights\s+(?:on|off)\b",
             r"\ball\s+(?:the\s+)?(?:house|home)?\s*lights\b",
             r"\bevery\s+light\b",
             r"\blights\s+(?:in|of)\s+(?:the\s+)?(?:house|home)\b",
@@ -376,6 +377,7 @@ class LocalInterpreter:
     def _looks_like_generic_lights_request(self, text: str) -> bool:
         patterns = (
             r"\b(?:turn|switch|power)\s+(?:on|off)\s+(?:the\s+)?lights\b",
+            r"\b(?:turn|switch|power)\s+all\s+lights\s+(?:on|off)\b",
             r"\b(?:shut)\s+off\s+(?:the\s+)?lights\b",
             r"\blights\s+(?:on|off)\b",
             r"\b(?:turn|switch|power)\s+(?:the\s+)?lights\s+(?:on|off)\b",
@@ -625,7 +627,7 @@ class LocalInterpreter:
 
         state = states_by_entity_id.get(target_id)
         if not isinstance(state, dict):
-            return True
+            return False
 
         raw_state = str(state.get("state", "")).strip().lower()
         return raw_state not in {"unavailable", "unknown"}

@@ -39,6 +39,7 @@ lappend rsync_args \
   "$project_dir/Dockerfile" \
   "$project_dir/docker-compose.yml" \
   "$project_dir/requirements.txt" \
+  "$project_dir/voice_model.json" \
   "$project_dir/.env" \
   "$remote:$remote_dir/"
 run_with_password $password $rsync_args

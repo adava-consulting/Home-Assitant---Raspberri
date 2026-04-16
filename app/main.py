@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from app.auth import request_has_valid_bridge_access
 from app.config import Settings, get_settings
@@ -50,6 +52,21 @@ app = FastAPI(
     version="0.1.0",
     dependencies=[Depends(require_bridge_auth)],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    detail = "I had trouble understanding that command. Please try again."
+    errors = exc.errors()
+    if any(
+        error.get("loc") == ("body", "text") and error.get("type") == "string_too_long"
+        for error in errors
+    ):
+        detail = "The spoken command was too long or repeated. Please try again."
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.on_event("startup")

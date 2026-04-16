@@ -1,3 +1,5 @@
+# Example voice-facing light groups.
+# Replace these members with the real entities discovered in Home Assistant.
 - platform: group
   name: Office
   unique_id: office

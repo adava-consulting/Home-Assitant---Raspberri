@@ -50,12 +50,15 @@ Default language/voice settings are:
 - Whisper model: `base-int8`
 - Whisper beam size: `1`
 - Whisper CPU threads: `4`
-- Whisper initial prompt: biased toward common light-control phrases
+- Whisper initial prompt: biased toward room, studio, and all-lights commands
 - Whisper VAD minimum speech: `200 ms`
 - Whisper VAD minimum silence: `700 ms`
 - Piper voice: `en_US-lessac-medium`
 - Wake word: `hey_jarvis`
 - Wake refractory: `2` seconds for faster re-trigger after short or empty wake-ups
+- Microphone mute after wake beep: `0.0` seconds so the command start is not clipped
+- Streaming watchdog timeout: `8` seconds
+- No-speech restart timeout: `0` seconds by default, so false wake-ups do not keep forcing restarts
 
 ## Important note about transcription quality
 
@@ -190,8 +193,17 @@ satellite launch command again.
 
 ## No-speech timeout after wake word
 
-If `hey_jarvis` is triggered by mistake and the session stays open too long, you
-can force the satellite back to idle quickly:
+By default this repo keeps the no-speech restart disabled:
+
+```bash
+SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0
+```
+
+That avoids unnecessary satellite restarts when the wake word triggers twice or
+when the first command word arrives a bit late.
+
+If empty wake-ups become a bigger problem than missed first words, you can
+temporarily enable a short reset window:
 
 ```bash
 SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=2
@@ -219,7 +231,7 @@ satellite event hooks to it.
 If the satellite ever gets stuck in `listening` after a wake word, enable the
 watchdog that restarts it when streaming stays open too long.
 
-1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=20` in `respeaker_lite_satellite.env`
+1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=8` in `respeaker_lite_satellite.env`
 2. Install the helper scripts and both systemd units:
    - `satellite_watchdog_hook.sh`
    - `satellite_watchdog_check.sh`

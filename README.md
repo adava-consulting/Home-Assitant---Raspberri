@@ -54,6 +54,7 @@ Important note:
 - this file helps the backend understand spoken names and constrain what it can control
 - it does not replace Home Assistant areas, floors, or aliases configured in the Home Assistant UI
 - for the best Assist performance, keep both aligned
+- before locking the model, inspect the live entity ids with `./scripts/pi lights-check`
 - for the fastest feel, keep both layers aligned:
   - Home Assistant areas, floors, and `custom_sentences` for closed fast commands
   - bridge aliases and curated allow-lists for open-ended requests that still need the backend
@@ -82,7 +83,14 @@ Current implementation:
   - `piper` as the local reliability fallback
   - `espeak-ng` as the simple built-in fallback
 
-Recommended Raspberry Pi analog-jack settings:
+Recommended stable default for this project:
+
+- keep `AUDIO_RESPONSE_ENABLED=0` so Home Assistant Assist remains the only speaker
+- turn bridge audio on only if you intentionally want a second local voice source
+- keep `AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS=20` to suppress repeated confirmations
+- keep `AUDIO_RESPONSE_MAX_CHARS=220` so accidental validation payloads are not spoken back
+
+Optional Raspberry Pi analog-jack bridge settings:
 
 - `AUDIO_RESPONSE_ENABLED=1`
 - `AUDIO_RESPONSE_ENGINE=kokoro`
@@ -91,6 +99,8 @@ Recommended Raspberry Pi analog-jack settings:
 - `AUDIO_RESPONSE_CACHE_DIR=/home/claude-host-home/ha-command-bridge-data/audio-cache`
 - `AUDIO_RESPONSE_FAST_ACK_FOR_LOCAL=0`
 - `AUDIO_RESPONSE_FAST_ACK_TEXT=Done.`
+- `AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS=20`
+- `AUDIO_RESPONSE_MAX_CHARS=220`
 - `KOKORO_MODEL_PATH=/home/claude-host-home/ha-command-bridge-data/kokoro/kokoro-v1.0.int8.onnx`
 - `KOKORO_VOICES_PATH=/home/claude-host-home/ha-command-bridge-data/kokoro/voices-v1.0.bin`
 - `KOKORO_VOICE=af_heart`
@@ -687,21 +697,21 @@ You only need code changes when introducing a completely new domain or action fa
 
 The most stable setup is:
 
-1. Standard smart-home control goes through Home Assistant directly.
-2. Closed fast commands use Home Assistant native intents, areas, and `custom_sentences`.
-3. More complex open-ended requests are forwarded to this backend only when explicitly prefixed.
-4. The backend enriches or interprets those requests and calls back into Home Assistant.
+1. Home Assistant Assist forwards the spoken text to the bridge.
+2. The bridge tries local-first interpretation for simple device commands.
+3. Home Assistant `custom_sentences` and `intent_script` still normalize the most common commands.
+4. `claude ...` remains available when you explicitly want to force open-ended interpretation.
 
 The bootstrap now includes:
 
 - `homeassistant_bootstrap/automations.yaml`
-  - forwards only `claude {command_text}` requests to the bridge
+  - forwards Assist commands to the bridge for local-first interpretation
 - `homeassistant_bootstrap/intent_scripts.yaml`
-  - provides instant local routines such as `good night` and `guest mode`
+  - provides fast bridge-routed intents for `good night`, `guest mode`, `all lights`, `room`, and `studio`
 - `homeassistant_bootstrap/custom_sentences/en/fast_commands.yaml`
-  - adds extra English sentence coverage for common light and routine phrases
+  - adds explicit English sentence coverage for room, studio, all-lights, and routine phrases
 
-This gives a much faster voice path for common household commands because Home Assistant can resolve them locally without waiting on the bridge or Claude.
+This gives a faster and more predictable voice path for common household commands because the phrases are normalized early and the bridge can stay on its local fast path.
 
 To use the intelligent interpreter, prefix the request with `claude`.
 
@@ -714,9 +724,35 @@ The backend strips the `claude` prefix before sending the request to Claude. Thi
 
 Recommended practical split:
 
-- say normal device commands naturally and let Home Assistant handle them locally
-- use `claude ...` only for open-ended or descriptive requests
+- say normal device commands naturally and let the bridge local interpreter handle them first
+- use `claude ...` only for open-ended or descriptive requests that should skip the local fast path
 - keep `VOICE_MODEL_FILE` and Home Assistant area/entity names aligned so both layers hear the same home vocabulary
+
+## Raspberry Workflow
+
+The repo now includes a single helper entry point for the Raspberry Pi workflow:
+
+```bash
+cp .pi.env.example .pi.env
+./scripts/pi status
+```
+
+Recommended commands:
+
+- `./scripts/pi status`
+  - quick health check for containers, IPs, and satellite service
+- `./scripts/pi deploy`
+  - updates the bridge and `voice_services/`
+- `./scripts/pi sync-ha`
+  - syncs `homeassistant_bootstrap/` into the Home Assistant container
+- `./scripts/pi redeploy`
+  - full stable redeploy: bridge, voice services, bootstrap, and tuned satellite values
+- `./scripts/pi lights-check`
+  - shows whether `light.room` and `light.studio` really exist on the live Home Assistant instance
+- `./scripts/pi voice-check`
+  - shows current wake-word, Whisper, and satellite timing values
+- `./scripts/pi shortcuts-install`
+  - installs local shell shortcuts like `hapi status` and `hapi room off --execute`
 
 ## Security
 
@@ -739,9 +775,11 @@ The repo now includes a simple backup helper for bridge state and local config:
 By default it backs up:
 
 - project `.env`
+- project `.pi.env`
 - `voice_model.json` if present
 - `credentials.env` if present
 - `voice_services/.env` if present
+- `voice_services/respeaker_lite_satellite.env` if present
 - persisted bridge data under `BRIDGE_DATA_DIR`
 
 By default it skips `audio-cache` so backups stay smaller. To include it:

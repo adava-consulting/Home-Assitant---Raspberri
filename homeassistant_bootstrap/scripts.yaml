@@ -54,9 +54,9 @@ send_command_to_bridge:
               "status": response.get("status", 0),
               "content": content,
               "assistant_response": assistant_response
-                if assistant_response
+                if assistant_response is string and assistant_response | length > 0
                 else detail
-                  if detail
+                  if detail is string and detail | length > 0
                   else "I had trouble processing that command."
             }
           }}

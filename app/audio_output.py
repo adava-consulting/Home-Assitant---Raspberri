@@ -14,6 +14,8 @@ import wave
 
 import httpx
 
+from app.voice_safety import normalized_text_key, sanitize_spoken_response
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,10 @@ class AudioOutputService:
         self._speed = int(getattr(settings, "audio_response_speed", 155))
         self._device = str(getattr(settings, "audio_response_device", "plughw:0,0"))
         self._cache_enabled = bool(getattr(settings, "audio_response_cache_enabled", True))
+        self._dedupe_window_seconds = float(
+            getattr(settings, "audio_response_dedupe_window_seconds", 20.0)
+        )
+        self._max_chars = int(getattr(settings, "audio_response_max_chars", 220))
         self._cache_dir = str(
             getattr(
                 settings,
@@ -67,6 +73,8 @@ class AudioOutputService:
         self._queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._worker_task: asyncio.Task[None] | None = None
         self._warmup_task: asyncio.Task[None] | None = None
+        self._last_enqueued_key = ""
+        self._last_enqueued_at = 0.0
 
     async def start(self) -> None:
         if not self._enabled or self._worker_task is not None:
@@ -97,9 +105,23 @@ class AudioOutputService:
     async def enqueue(self, text: str | None) -> None:
         if not self._enabled or not text:
             return
-        normalized = text.strip()
+        normalized = sanitize_spoken_response(text, max_chars=self._max_chars)
         if not normalized:
             return
+        dedupe_key = normalized_text_key(normalized)
+        now = time.monotonic()
+        if (
+            dedupe_key
+            and dedupe_key == self._last_enqueued_key
+            and (now - self._last_enqueued_at) <= self._dedupe_window_seconds
+        ):
+            logger.info(
+                "Skipping duplicate audio response within dedupe window: text=%s",
+                normalized,
+            )
+            return
+        self._last_enqueued_key = dedupe_key
+        self._last_enqueued_at = now
         await self._queue.put(normalized)
 
     def diagnostics(self) -> dict[str, object]:

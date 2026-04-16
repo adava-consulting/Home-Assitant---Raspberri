@@ -1,3 +1,75 @@
+BridgeAllLightsOn:
+  description: Fast local all-lights on request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_command_to_bridge
+      data:
+        command_text: "turn all lights on"
+        dry_run: false
+
+BridgeAllLightsOff:
+  description: Fast local all-lights off request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_command_to_bridge
+      data:
+        command_text: "turn all lights off"
+        dry_run: false
+
+BridgeRoomLightsOn:
+  description: Fast local room-lights on request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_command_to_bridge
+      data:
+        command_text: "turn the room lights on"
+        dry_run: false
+
+BridgeRoomLightsOff:
+  description: Fast local room-lights off request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_command_to_bridge
+      data:
+        command_text: "turn the room lights off"
+        dry_run: false
+
+BridgeStudioLightsOn:
+  description: Fast local studio-lights on request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_command_to_bridge
+      data:
+        command_text: "turn the studio lights on"
+        dry_run: false
+
+BridgeStudioLightsOff:
+  description: Fast local studio-lights off request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_command_to_bridge
+      data:
+        command_text: "turn the studio lights off"
+        dry_run: false
+
 BridgeGoodNight:
   description: Fast local bedtime routine for voice requests such as good night.
   async_action: true

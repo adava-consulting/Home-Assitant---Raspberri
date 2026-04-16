@@ -58,6 +58,11 @@ sudo dmesg -T | grep -Ei 'usb|under.?voltage|thrott|reset|disconnect|xhci|urb' |
 systemctl cat wyoming-satellite.service > $remote_bundle_dir/wyoming-satellite.unit.txt 2>&1 && \
 ls -l $remote_bridge_dir/voice_services/run_wyoming_satellite.sh > $remote_bundle_dir/run_wyoming_satellite.ls.txt 2>&1 && \
 ls -l $remote_bridge_dir/voice_services/respeaker_lite_satellite.env > $remote_bundle_dir/respeaker_env.ls.txt 2>&1 && \
+cp $remote_bridge_dir/voice_services/run_wyoming_satellite.sh $remote_bundle_dir/run_wyoming_satellite.sh 2>/dev/null || true && \
+cp $remote_bridge_dir/voice_services/satellite_watchdog_hook.sh $remote_bundle_dir/satellite_watchdog_hook.sh 2>/dev/null || true && \
+cp $remote_bridge_dir/voice_services/satellite_watchdog_check.sh $remote_bundle_dir/satellite_watchdog_check.sh 2>/dev/null || true && \
+cp $remote_bridge_dir/voice_services/respeaker_lite_satellite.env $remote_bundle_dir/respeaker_lite_satellite.env 2>/dev/null || true && \
+cp $remote_bridge_dir/voice_services/.env $remote_bundle_dir/voice-services.env 2>/dev/null || true && \
 docker cp homeassistant:/config/configuration.yaml $remote_bundle_dir/ha-config/configuration.yaml > /dev/null 2>&1 || true && \
 docker cp homeassistant:/config/automations.yaml $remote_bundle_dir/ha-config/automations.yaml > /dev/null 2>&1 || true && \
 docker cp homeassistant:/config/input_booleans.yaml $remote_bundle_dir/ha-config/input_booleans.yaml > /dev/null 2>&1 || true && \

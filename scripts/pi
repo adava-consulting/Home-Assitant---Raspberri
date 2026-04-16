@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG_FILE="${PI_CONFIG_FILE:-${PROJECT_DIR}/.pi.env}"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+: "${PI_HOST:=192.168.0.17}"
+: "${PI_USER:=lucas}"
+: "${PI_PASSWORD:=}"
+: "${PI_REMOTE_BRIDGE_DIR:=/home/lucas/ha-command-bridge}"
+: "${PI_REMOTE_BOOTSTRAP_DIR:=/home/lucas/homeassistant-bootstrap}"
+
+escape_single_quotes() {
+  printf "%s" "$1" | sed "s/'/'\"'\"'/g"
+}
+
+need_password() {
+  if [[ -z "${PI_PASSWORD}" ]]; then
+    echo "PI_PASSWORD is empty. Create ${CONFIG_FILE} from .pi.env.example." >&2
+    exit 1
+  fi
+}
+
+run_ssh_expect() {
+  need_password
+  expect "${PROJECT_DIR}/scripts/ssh_command.expect" \
+    "${PI_PASSWORD}" \
+    "${PI_HOST}" \
+    "$1"
+}
+
+run_ssh_expect_with_sudo() {
+  need_password
+  local escaped_password
+  escaped_password="$(escape_single_quotes "${PI_PASSWORD}")"
+  local command="$1"
+  run_ssh_expect "printf '%s\n' '${escaped_password}' | sudo -S bash -lc '$(escape_single_quotes "$command")'"
+}
+
+show_help() {
+  cat <<'EOF'
+Usage:
+  ./scripts/pi status
+  ./scripts/pi doctor
+  ./scripts/pi ghost-check
+  ./scripts/pi voice-check
+  ./scripts/pi lights-check
+  ./scripts/pi shortcuts-install
+  ./scripts/pi bridge-audio <on|off>
+  ./scripts/pi single-voice
+  ./scripts/pi cmd "<remote command>"
+  ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite>
+  ./scripts/pi bridge-test "<text>" [--execute]
+  ./scripts/pi lights <room|studio|all> <on|off> [--execute]
+  ./scripts/pi room <on|off> [--execute]
+  ./scripts/pi studio <on|off> [--execute]
+  ./scripts/pi all <on|off> [--execute]
+  ./scripts/pi deploy
+  ./scripts/pi deploy-voice
+  ./scripts/pi sync-ha
+  ./scripts/pi redeploy
+  ./scripts/pi fetch-debug
+  ./scripts/pi satellite-fast
+  ./scripts/pi ssh
+
+Examples:
+  ./scripts/pi status
+  ./scripts/pi doctor
+  ./scripts/pi ghost-check
+  ./scripts/pi voice-check
+  ./scripts/pi lights-check
+  ./scripts/pi shortcuts-install
+  ./scripts/pi bridge-audio off
+  ./scripts/pi single-voice
+  ./scripts/pi logs satellite
+  ./scripts/pi bridge-test "turn the studio lights off"
+  ./scripts/pi room off --execute
+  ./scripts/pi all on --execute
+  ./scripts/pi redeploy
+  ./scripts/pi shortcuts-install
+  ./scripts/pi cmd "docker ps --format 'table {{.Names}}\t{{.Status}}'"
+EOF
+}
+
+bridge_test() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: ./scripts/pi bridge-test \"<text>\" [--execute]" >&2
+    exit 1
+  fi
+  local dry_run=true
+  local text="$1"
+  if [[ "${2:-}" == "--execute" ]]; then
+    dry_run=false
+  fi
+  local json_payload
+  json_payload="$(printf '{"text":"%s","dry_run":%s}' "$(printf '%s' "$text" | sed 's/"/\\"/g')" "$dry_run")"
+  run_ssh_expect "curl -s -X POST http://127.0.0.1:8000/commands/interpret -H 'Content-Type: application/json' -d '$json_payload'"
+}
+
+lights_phrase() {
+  local target="$1"
+  local action="$2"
+  case "$target" in
+    room)
+      printf 'turn the room lights %s' "$action"
+      ;;
+    studio)
+      printf 'turn the studio lights %s' "$action"
+      ;;
+    all)
+      printf 'turn all lights %s' "$action"
+      ;;
+    *)
+      echo "Unsupported lights target: ${target}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+if [[ $# -lt 1 ]]; then
+  show_help
+  exit 1
+fi
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+  status)
+    run_ssh_expect "hostname && hostname -I && echo && docker ps --format 'table {{.Names}}\t{{.Status}}'"
+    printf '\n'
+    run_ssh_expect_with_sudo "systemctl status wyoming-satellite.service --no-pager"
+    printf '\n'
+    run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && grep '^VOICE_MODEL_FILE=' .env || true"
+    ;;
+
+  doctor)
+    run_ssh_expect "hostname && hostname -I && echo && uptime && echo && free -h && echo && docker ps --format 'table {{.Names}}\t{{.Status}}'"
+    printf '\n'
+    run_ssh_expect_with_sudo "systemctl status wyoming-satellite.service --no-pager"
+    printf '\n'
+    run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && grep '^VOICE_MODEL_FILE=' .env || true"
+    printf '\n'
+    bridge_test "turn the room lights off"
+    ;;
+
+  ghost-check)
+    run_ssh_expect "echo '== scheduled jobs ==' && curl -s http://127.0.0.1:8000/scheduled-jobs && echo && echo && echo '== routines ==' && curl -s http://127.0.0.1:8000/routines && echo && echo && echo '== saved scenes ==' && curl -s http://127.0.0.1:8000/saved-scenes && echo && echo && echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE)=' .env || true"
+    printf '\n'
+    run_ssh_expect "echo '== recent bridge log hints ==' && docker logs --tail 120 ha-command-bridge 2>&1 | egrep -i 'turned on|turned off|scheduled|routine|scene|audio response|error' || true"
+    ;;
+
+  voice-check)
+    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    printf '\n'
+    run_ssh_expect_with_sudo "echo '== recent satellite voice events ==' && journalctl -u wyoming-satellite.service -n 120 --no-pager | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|No speech detected|stt-no-text-recognized|String should have at most 500|Waiting for wake word' || true"
+    ;;
+
+  lights-check)
+    run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && set -a && . ./.env && set +a && python3 - <<'PY'\nimport json\nimport os\nimport urllib.request\n\nurl = os.environ['HOME_ASSISTANT_URL'].rstrip('/') + '/api/states'\nreq = urllib.request.Request(url, headers={'Authorization': f\"Bearer {os.environ['HOME_ASSISTANT_TOKEN']}\"})\nwith urllib.request.urlopen(req, timeout=20) as response:\n    states = json.load(response)\n\ninteresting = ['light.room', 'light.studio', 'light.cuarto']\nprint('== explicit targets ==')\nfor entity_id in interesting:\n    state = next((item for item in states if item.get('entity_id') == entity_id), None)\n    if state is None:\n        print(f'{entity_id}: MISSING')\n        continue\n    friendly = state.get('attributes', {}).get('friendly_name', '')\n    members = state.get('attributes', {}).get('entity_id')\n    print(f\"{entity_id}: state={state.get('state')} friendly_name={friendly!r} members={members}\")\n\nkeywords = ('room', 'studio', 'cuarto', 'bedroom')\nprint('\\n== matching light candidates ==')\nfor state in states:\n    entity_id = state.get('entity_id', '')\n    if not isinstance(entity_id, str) or not entity_id.startswith('light.'):\n        continue\n    friendly = str(state.get('attributes', {}).get('friendly_name', ''))\n    haystack = f\"{entity_id} {friendly}\".lower()\n    if any(keyword in haystack for keyword in keywords):\n        members = state.get('attributes', {}).get('entity_id')\n        print(f\"{entity_id}: state={state.get('state')} friendly_name={friendly!r} members={members}\")\nPY"
+    ;;
+
+  shortcuts-install)
+    "${PROJECT_DIR}/scripts/install_pi_shortcuts.sh"
+    ;;
+
+  bridge-audio)
+    if [[ $# -ne 1 ]]; then
+      echo "Usage: ./scripts/pi bridge-audio <on|off>" >&2
+      exit 1
+    fi
+    case "$1" in
+      on) audio_value=1 ;;
+      off) audio_value=0 ;;
+      *)
+        echo "Usage: ./scripts/pi bridge-audio <on|off>" >&2
+        exit 1
+        ;;
+    esac
+    run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && if grep -q '^AUDIO_RESPONSE_ENABLED=' .env; then sed -i 's/^AUDIO_RESPONSE_ENABLED=.*/AUDIO_RESPONSE_ENABLED=${audio_value}/' .env; else printf '\nAUDIO_RESPONSE_ENABLED=${audio_value}\n' >> .env; fi && grep '^AUDIO_RESPONSE_ENABLED=' .env && docker compose up -d"
+    ;;
+
+  single-voice)
+    run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && if grep -q '^AUDIO_RESPONSE_ENABLED=' .env; then sed -i 's/^AUDIO_RESPONSE_ENABLED=.*/AUDIO_RESPONSE_ENABLED=0/' .env; else printf '\nAUDIO_RESPONSE_ENABLED=0\n' >> .env; fi && grep '^AUDIO_RESPONSE_ENABLED=' .env && docker compose up -d"
+    ;;
+
+  cmd)
+    if [[ $# -lt 1 ]]; then
+      echo "Usage: ./scripts/pi cmd \"<remote command>\"" >&2
+      exit 1
+    fi
+    run_ssh_expect "$*"
+    ;;
+
+  logs)
+    if [[ $# -ne 1 ]]; then
+      echo "Usage: ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite>" >&2
+      exit 1
+    fi
+    case "$1" in
+      homeassistant)
+        run_ssh_expect "docker logs --tail 200 homeassistant"
+        ;;
+      bridge)
+        run_ssh_expect "docker logs --tail 200 ha-command-bridge"
+        ;;
+      openwakeword)
+        run_ssh_expect "docker logs --tail 200 wyoming-openwakeword"
+        ;;
+      whisper)
+        run_ssh_expect "docker logs --tail 200 wyoming-whisper"
+        ;;
+      piper)
+        run_ssh_expect "docker logs --tail 200 wyoming-piper"
+        ;;
+      satellite)
+        run_ssh_expect_with_sudo "journalctl -u wyoming-satellite.service -n 200 --no-pager"
+        ;;
+      *)
+        echo "Unknown log target: $1" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  bridge-test)
+    bridge_test "$@"
+    ;;
+
+  lights)
+    if [[ $# -lt 2 ]]; then
+      echo "Usage: ./scripts/pi lights <room|studio|all> <on|off> [--execute]" >&2
+      exit 1
+    fi
+    target="$1"
+    action="$2"
+    phrase="$(lights_phrase "$target" "$action")"
+    if [[ "${3:-}" == "--execute" ]]; then
+      bridge_test "$phrase" --execute
+    else
+      bridge_test "$phrase"
+    fi
+    ;;
+
+  room|studio|all)
+    if [[ $# -lt 1 ]]; then
+      echo "Usage: ./scripts/pi ${subcommand} <on|off> [--execute]" >&2
+      exit 1
+    fi
+    action="$1"
+    phrase="$(lights_phrase "$subcommand" "$action")"
+    if [[ "${2:-}" == "--execute" ]]; then
+      bridge_test "$phrase" --execute
+    else
+      bridge_test "$phrase"
+    fi
+    ;;
+
+  deploy)
+    need_password
+    expect "${PROJECT_DIR}/scripts/deploy_to_pi.expect" \
+      "${PI_PASSWORD}" \
+      "${PI_HOST}" \
+      "${PI_REMOTE_BRIDGE_DIR}" \
+      "${PROJECT_DIR}"
+    expect "${PROJECT_DIR}/scripts/deploy_voice_services.expect" \
+      "${PI_PASSWORD}" \
+      "${PI_HOST}" \
+      "${PROJECT_DIR}/voice_services" \
+      "${PI_REMOTE_BRIDGE_DIR}/voice_services"
+    ;;
+
+  deploy-voice)
+    need_password
+    expect "${PROJECT_DIR}/scripts/deploy_voice_services.expect" \
+      "${PI_PASSWORD}" \
+      "${PI_HOST}" \
+      "${PROJECT_DIR}/voice_services" \
+      "${PI_REMOTE_BRIDGE_DIR}/voice_services"
+    ;;
+
+  sync-ha)
+    need_password
+    expect "${PROJECT_DIR}/scripts/sync_ha_bootstrap.expect" \
+      "${PI_PASSWORD}" \
+      "${PI_HOST}" \
+      "${PROJECT_DIR}/homeassistant_bootstrap" \
+      "${PI_REMOTE_BOOTSTRAP_DIR}"
+    ;;
+
+  redeploy)
+    need_password
+    "${PROJECT_DIR}/scripts/redeploy_pi_stack.sh" "${PI_PASSWORD}" "${PI_HOST}"
+    ;;
+
+  fetch-debug)
+    need_password
+    expect "${PROJECT_DIR}/scripts/fetch_pi_debug.expect" \
+      "${PI_PASSWORD}" \
+      "${PI_HOST}" \
+      "${PI_REMOTE_BRIDGE_DIR}" \
+      "${PROJECT_DIR}/pi_debug"
+    ;;
+
+  satellite-fast)
+    voice_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env"
+    run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
+      if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=2/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=2\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=' '${voice_env_file}'; then sed -i \"s/^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=.*/MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0/\" '${voice_env_file}'; else printf '\nMIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
+      systemctl restart wyoming-satellite.service; \
+      grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS)=' '${voice_env_file}'; \
+      echo; systemctl status wyoming-satellite.service --no-pager; \
+    else \
+      echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
+    fi"
+    ;;
+
+  ssh)
+    exec ssh -o StrictHostKeyChecking=accept-new "${PI_USER}@${PI_HOST}"
+    ;;
+
+  *)
+    echo "Unknown subcommand: ${subcommand}" >&2
+    echo >&2
+    show_help
+    exit 1
+    ;;
+esac

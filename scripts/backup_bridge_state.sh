@@ -29,9 +29,11 @@ copy_if_exists() {
 }
 
 copy_if_exists "${PROJECT_DIR}/.env" "${STAGING_DIR}/project/.env"
+copy_if_exists "${PROJECT_DIR}/.pi.env" "${STAGING_DIR}/project/.pi.env"
 copy_if_exists "${PROJECT_DIR}/voice_model.json" "${STAGING_DIR}/project/voice_model.json"
 copy_if_exists "${PROJECT_DIR}/credentials.env" "${STAGING_DIR}/project/credentials.env"
 copy_if_exists "${PROJECT_DIR}/voice_services/.env" "${STAGING_DIR}/project/voice_services.env"
+copy_if_exists "${PROJECT_DIR}/voice_services/respeaker_lite_satellite.env" "${STAGING_DIR}/project/respeaker_lite_satellite.env"
 
 if [[ -d "${BRIDGE_DATA_DIR}" ]]; then
   if [[ "${BACKUP_INCLUDE_AUDIO_CACHE}" == "1" ]]; then

@@ -1,25 +1,49 @@
 language: "en"
 intents:
-  HassTurnOn:
+  BridgeAllLightsOn:
     data:
       - sentences:
           - "(lights on|all lights on)"
           - "<turn_on_verb> on [all [of] [the]] lights"
           - "<turn_on_verb> [all [of] [the]] lights on"
-      - sentences:
-          - "<turn_on_verb> on [the] {area} lights"
-          - "<turn_on_verb> [the] lights in [the] {area} on"
-  HassTurnOff:
+  BridgeAllLightsOff:
     data:
       - sentences:
           - "(lights off|all lights off)"
           - "<turn_off_verb> off [all [of] [the]] lights"
           - "<turn_off_verb> [all [of] [the]] lights off"
           - "shut [all [of] [the]] lights off"
+  BridgeRoomLightsOn:
+    data:
       - sentences:
-          - "<turn_off_verb> off [the] {area} lights"
-          - "<turn_off_verb> [the] lights in [the] {area} off"
-          - "shut [the] {area} lights off"
+          - "<turn_on_verb> on [the] room lights"
+          - "<turn_on_verb> [the] room lights on"
+          - "<turn_on_verb> on [the] bedroom lights"
+          - "<turn_on_verb> [the] bedroom lights on"
+  BridgeRoomLightsOff:
+    data:
+      - sentences:
+          - "<turn_off_verb> off [the] room lights"
+          - "<turn_off_verb> [the] room lights off"
+          - "shut [the] room lights off"
+          - "<turn_off_verb> off [the] bedroom lights"
+          - "<turn_off_verb> [the] bedroom lights off"
+          - "shut [the] bedroom lights off"
+  BridgeStudioLightsOn:
+    data:
+      - sentences:
+          - "<turn_on_verb> on [the] studio lights"
+          - "<turn_on_verb> [the] studio lights on"
+          - "<turn_on_verb> on [the] studio lamp"
+          - "<turn_on_verb> on [the] studio lamps"
+  BridgeStudioLightsOff:
+    data:
+      - sentences:
+          - "<turn_off_verb> off [the] studio lights"
+          - "<turn_off_verb> [the] studio lights off"
+          - "shut [the] studio lights off"
+          - "<turn_off_verb> off [the] studio lamp"
+          - "<turn_off_verb> off [the] studio lamps"
   BridgeGoodNight:
     data:
       - sentences:

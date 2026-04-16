@@ -1,0 +1,87 @@
+{
+  "allowed_entities": [
+    "light.room",
+    "light.studio"
+  ],
+  "allowed_scenes": [
+    "scene.good_night",
+    "scene.guest_mode"
+  ],
+  "allowed_scripts": [
+    "script.prepare_bedtime",
+    "script.welcome_guests"
+  ],
+  "ignored_entities": [
+    "light.office",
+    "scene.new_lighting_scene",
+    "scene.new_lighting_scene_2",
+    "scene.turn_on",
+    "scene.turn_off",
+    "sensor.command_bridge_pending_jobs",
+    "sensor.command_bridge_routines",
+    "script.cancel_scheduled_bridge_job",
+    "script.delete_bridge_routine",
+    "script.disable_bridge_routine",
+    "script.enable_bridge_routine",
+    "script.send_command_to_bridge",
+    "script.show_bridge_routines",
+    "script.show_scheduled_bridge_jobs",
+    "script.update_bridge_routine_time",
+    "switch.respeaker_lite_mute"
+  ],
+  "target_overrides": {
+    "light.room": {
+      "aliases": [
+        "room light",
+        "room lights",
+        "bedroom light",
+        "bedroom lights"
+      ],
+      "actions": [
+        "turn_on",
+        "turn_off",
+        "get_state"
+      ]
+    },
+    "light.studio": {
+      "aliases": [
+        "studio light",
+        "studio lights",
+        "studio lamp",
+        "studio lamps"
+      ],
+      "actions": [
+        "turn_on",
+        "turn_off",
+        "get_state"
+      ]
+    },
+    "scene.good_night": {
+      "aliases": [
+        "good night",
+        "night mode",
+        "sleep mode"
+      ]
+    },
+    "scene.guest_mode": {
+      "aliases": [
+        "guest mode",
+        "visitor mode"
+      ]
+    },
+    "script.prepare_bedtime": {
+      "aliases": [
+        "prepare bedtime",
+        "bedtime routine",
+        "get the house ready for bed"
+      ]
+    },
+    "script.welcome_guests": {
+      "aliases": [
+        "welcome guests",
+        "guest lights",
+        "prepare for guests"
+      ]
+    }
+  }
+}
