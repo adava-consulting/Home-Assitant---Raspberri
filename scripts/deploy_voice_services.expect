@@ -35,5 +35,5 @@ set rsync_args [list rsync -av --exclude __pycache__ --exclude whisper-data --ex
 lappend rsync_args "$local_dir/" "$remote:$remote_dir/"
 run_with_password $password $rsync_args
 
-set deploy_cmd "cd $remote_dir && docker compose up -d && docker compose ps"
+set deploy_cmd "docker rm -f wyoming-openwakeword wyoming-whisper wyoming-piper >/dev/null 2>&1 || true && cd $remote_dir && docker compose up -d && docker compose ps"
 run_with_password $password [list ssh $remote $deploy_cmd]

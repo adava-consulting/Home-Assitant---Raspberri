@@ -162,7 +162,43 @@ case "$subcommand" in
     ;;
 
   lights-check)
-    run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && set -a && . ./.env && set +a && python3 - <<'PY'\nimport json\nimport os\nimport urllib.request\n\nurl = os.environ['HOME_ASSISTANT_URL'].rstrip('/') + '/api/states'\nreq = urllib.request.Request(url, headers={'Authorization': f\"Bearer {os.environ['HOME_ASSISTANT_TOKEN']}\"})\nwith urllib.request.urlopen(req, timeout=20) as response:\n    states = json.load(response)\n\ninteresting = ['light.room', 'light.studio', 'light.cuarto']\nprint('== explicit targets ==')\nfor entity_id in interesting:\n    state = next((item for item in states if item.get('entity_id') == entity_id), None)\n    if state is None:\n        print(f'{entity_id}: MISSING')\n        continue\n    friendly = state.get('attributes', {}).get('friendly_name', '')\n    members = state.get('attributes', {}).get('entity_id')\n    print(f\"{entity_id}: state={state.get('state')} friendly_name={friendly!r} members={members}\")\n\nkeywords = ('room', 'studio', 'cuarto', 'bedroom')\nprint('\\n== matching light candidates ==')\nfor state in states:\n    entity_id = state.get('entity_id', '')\n    if not isinstance(entity_id, str) or not entity_id.startswith('light.'):\n        continue\n    friendly = str(state.get('attributes', {}).get('friendly_name', ''))\n    haystack = f\"{entity_id} {friendly}\".lower()\n    if any(keyword in haystack for keyword in keywords):\n        members = state.get('attributes', {}).get('entity_id')\n        print(f\"{entity_id}: state={state.get('state')} friendly_name={friendly!r} members={members}\")\nPY"
+    run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && set -a && . ./.env && set +a && python3 - <<'PY'
+import json
+import os
+import urllib.request
+
+url = os.environ['HOME_ASSISTANT_URL'].rstrip('/') + '/api/states'
+req = urllib.request.Request(
+    url,
+    headers={'Authorization': f\"Bearer {os.environ['HOME_ASSISTANT_TOKEN']}\"},
+)
+with urllib.request.urlopen(req, timeout=20) as response:
+    states = json.load(response)
+
+interesting = ['light.room', 'light.studio', 'light.cuarto']
+print('== explicit targets ==')
+for entity_id in interesting:
+    state = next((item for item in states if item.get('entity_id') == entity_id), None)
+    if state is None:
+        print(f'{entity_id}: MISSING')
+        continue
+    friendly = state.get('attributes', {}).get('friendly_name', '')
+    members = state.get('attributes', {}).get('entity_id')
+    print(f\"{entity_id}: state={state.get('state')} friendly_name={friendly!r} members={members}\")
+
+keywords = ('room', 'studio', 'cuarto', 'bedroom')
+print()
+print('== matching light candidates ==')
+for state in states:
+    entity_id = state.get('entity_id', '')
+    if not isinstance(entity_id, str) or not entity_id.startswith('light.'):
+        continue
+    friendly = str(state.get('attributes', {}).get('friendly_name', ''))
+    haystack = f\"{entity_id} {friendly}\".lower()
+    if any(keyword in haystack for keyword in keywords):
+        members = state.get('attributes', {}).get('entity_id')
+        print(f\"{entity_id}: state={state.get('state')} friendly_name={friendly!r} members={members}\")
+PY"
     ;;
 
   shortcuts-install)
