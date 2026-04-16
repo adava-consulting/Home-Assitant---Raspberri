@@ -60,7 +60,7 @@ Default language/voice settings are:
 - openWakeWord refractory: `1.0` second
 - Wake refractory: `1` second for faster re-trigger after short or empty wake-ups
 - Microphone mute after wake beep: `0.0` seconds so the command start is not clipped
-- Streaming watchdog timeout: `8` seconds
+- Streaming watchdog timeout: `0` by default while tuning wake word reliability
 - No-speech restart timeout: `0` by default to avoid long reconnect gaps after empty wake-ups
 
 ## Important note about transcription quality
@@ -236,7 +236,7 @@ satellite event hooks to it.
 If the satellite ever gets stuck in `listening` after a wake word, enable the
 watchdog that restarts it when streaming stays open too long.
 
-1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=8` in `respeaker_lite_satellite.env`
+1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=0` while tuning wake word behavior
 2. Install the helper scripts and both systemd units:
    - `satellite_watchdog_hook.sh`
    - `satellite_watchdog_check.sh`
@@ -249,6 +249,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now wyoming-satellite-watchdog.timer
 ```
 
+When you later need protection against real stuck-listening bugs, raise
+`SATELLITE_STREAMING_TIMEOUT_SECONDS` to a small non-zero value again.
 The satellite wrapper will automatically set hook commands that create a state
 file when streaming starts and clear it on transcript, stop, or error. The
 watchdog timer checks that state file every 10 seconds and restarts

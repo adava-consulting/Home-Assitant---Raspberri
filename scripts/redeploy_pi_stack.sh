@@ -39,7 +39,7 @@ expect "${PROJECT_DIR}/scripts/ssh_command.expect" \
    "printf '%s\n' '${ESCAPED_PASSWORD}' | sudo -S bash -lc 'if [ -f \"${VOICE_ENV_FILE}\" ]; then \
      if grep -q \"^WAKE_REFRACTORY_SECONDS=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=1/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nWAKE_REFRACTORY_SECONDS=1\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \
      if grep -q \"^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=.*/MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nMIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \
-     if grep -q \"^SATELLITE_STREAMING_TIMEOUT_SECONDS=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \
+     if grep -q \"^SATELLITE_STREAMING_TIMEOUT_SECONDS=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=0/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nSATELLITE_STREAMING_TIMEOUT_SECONDS=0\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \
      if grep -q \"^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \
      systemctl restart wyoming-satellite.service; \
    fi; \
