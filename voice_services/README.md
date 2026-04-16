@@ -55,10 +55,13 @@ Default language/voice settings are:
 - Whisper VAD minimum silence: `700 ms`
 - Piper voice: `en_US-lessac-medium`
 - Wake word: `hey_jarvis`
-- Wake refractory: `2` seconds for faster re-trigger after short or empty wake-ups
+- openWakeWord threshold: `0.35` to reduce missed activations in this room
+- openWakeWord trigger level: `1`
+- openWakeWord refractory: `1.0` second
+- Wake refractory: `1` second for faster re-trigger after short or empty wake-ups
 - Microphone mute after wake beep: `0.0` seconds so the command start is not clipped
 - Streaming watchdog timeout: `8` seconds
-- No-speech restart timeout: `0` seconds by default, so false wake-ups do not keep forcing restarts
+- No-speech restart timeout: `3` seconds so empty wake-ups fall back to idle quickly
 
 ## Important note about transcription quality
 
@@ -196,22 +199,12 @@ satellite launch command again.
 By default this repo keeps the no-speech restart disabled:
 
 ```bash
-SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0
+SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=3
 ```
 
-That avoids unnecessary satellite restarts when the wake word triggers twice or
-when the first command word arrives a bit late.
-
-If empty wake-ups become a bigger problem than missed first words, you can
-temporarily enable a short reset window:
-
-```bash
-SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=2
-```
-
-With that enabled, the hook script starts a short timer on wake detection. If the
-user does not actually begin speaking before the timeout, the satellite process is
-terminated and systemd brings it back immediately. If `HOME_ASSISTANT_URL` and
+The hook script starts a short timer on wake detection. If the user does not
+actually begin speaking before the timeout, the satellite process is terminated
+and systemd brings it back immediately. If `HOME_ASSISTANT_URL` and
 `HOME_ASSISTANT_TOKEN` are available through the project `.env`, the hook also
 nudges `assist_satellite.respeaker_lite` back to `idle` by calling
 `assist_satellite.announce` with an empty message. This keeps the Home Assistant
