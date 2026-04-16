@@ -402,8 +402,12 @@ PY"
       if grep -q '^WAKE_WORD_THRESHOLD=' '${wake_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.35/\" '${wake_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.35\n' >> '${wake_env_file}'; fi; \
       if grep -q '^WAKE_WORD_TRIGGER_LEVEL=' '${wake_env_file}'; then sed -i \"s/^WAKE_WORD_TRIGGER_LEVEL=.*/WAKE_WORD_TRIGGER_LEVEL=1/\" '${wake_env_file}'; else printf '\nWAKE_WORD_TRIGGER_LEVEL=1\n' >> '${wake_env_file}'; fi; \
       if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${wake_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=1.0/\" '${wake_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=1.0\n' >> '${wake_env_file}'; fi; \
-      cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && docker compose up -d openwakeword; \
-      echo; grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS)=' '${wake_env_file}'; \
+      if grep -q '^WHISPER_BEAM_SIZE=' '${wake_env_file}'; then sed -i \"s/^WHISPER_BEAM_SIZE=.*/WHISPER_BEAM_SIZE=1/\" '${wake_env_file}'; else printf '\nWHISPER_BEAM_SIZE=1\n' >> '${wake_env_file}'; fi; \
+      if grep -q '^WHISPER_VAD_MIN_SPEECH_MS=' '${wake_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SPEECH_MS=.*/WHISPER_VAD_MIN_SPEECH_MS=200/\" '${wake_env_file}'; else printf '\nWHISPER_VAD_MIN_SPEECH_MS=200\n' >> '${wake_env_file}'; fi; \
+      if grep -q '^WHISPER_VAD_MIN_SILENCE_MS=' '${wake_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SILENCE_MS=.*/WHISPER_VAD_MIN_SILENCE_MS=700/\" '${wake_env_file}'; else printf '\nWHISPER_VAD_MIN_SILENCE_MS=700\n' >> '${wake_env_file}'; fi; \
+      if grep -q '^WHISPER_INITIAL_PROMPT=' '${wake_env_file}'; then sed -i \"s#^WHISPER_INITIAL_PROMPT=.*#WHISPER_INITIAL_PROMPT=Turn on the lights. Turn off the lights. Turn all lights on. Turn all lights off. Turn on the room lights. Turn off the room lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.#\" '${wake_env_file}'; else printf '\nWHISPER_INITIAL_PROMPT=Turn on the lights. Turn off the lights. Turn all lights on. Turn all lights off. Turn on the room lights. Turn off the room lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.\n' >> '${wake_env_file}'; fi; \
+      cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && docker compose up -d openwakeword whisper; \
+      echo; grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS|WHISPER_INITIAL_PROMPT)=' '${wake_env_file}'; \
     fi"
     ;;
 
