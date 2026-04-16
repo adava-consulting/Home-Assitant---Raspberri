@@ -61,7 +61,7 @@ Default language/voice settings are:
 - Wake refractory: `1` second for faster re-trigger after short or empty wake-ups
 - Microphone mute after wake beep: `0.0` seconds so the command start is not clipped
 - Streaming watchdog timeout: `8` seconds
-- No-speech restart timeout: `3` seconds so empty wake-ups fall back to idle quickly
+- No-speech restart timeout: `0` by default to avoid long reconnect gaps after empty wake-ups
 
 ## Important note about transcription quality
 
@@ -198,17 +198,29 @@ satellite launch command again.
 
 By default this repo keeps the no-speech restart disabled:
 
+Stable default:
+
+```bash
+SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0
+```
+
+This avoids long reconnect gaps after an empty wake-up.
+
+If you specifically want aggressive recovery from empty wake-ups, you can enable
+a short restart window:
+
 ```bash
 SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=3
 ```
 
-The hook script starts a short timer on wake detection. If the user does not
-actually begin speaking before the timeout, the satellite process is terminated
-and systemd brings it back immediately. If `HOME_ASSISTANT_URL` and
-`HOME_ASSISTANT_TOKEN` are available through the project `.env`, the hook also
-nudges `assist_satellite.respeaker_lite` back to `idle` by calling
-`assist_satellite.announce` with an empty message. This keeps the Home Assistant
-entity state closer to the real satellite state during empty wake-ups.
+With that enabled, the hook script starts a short timer on wake detection. If
+the user does not actually begin speaking before the timeout, the satellite
+process is terminated and systemd brings it back immediately. If
+`HOME_ASSISTANT_URL` and `HOME_ASSISTANT_TOKEN` are available through the
+project `.env`, the hook also nudges `assist_satellite.respeaker_lite` back to
+`idle` by calling `assist_satellite.announce` with an empty message. This keeps
+the Home Assistant entity state closer to the real satellite state during empty
+wake-ups.
 
 ## ReSpeaker Lite RGB note
 

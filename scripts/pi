@@ -53,6 +53,7 @@ Usage:
   ./scripts/pi shortcuts-install
   ./scripts/pi bridge-audio <on|off>
   ./scripts/pi single-voice
+  ./scripts/pi satellite-channel <auto|0|1>
   ./scripts/pi cmd "<remote command>"
   ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite>
   ./scripts/pi bridge-test "<text>" [--execute]
@@ -77,6 +78,7 @@ Examples:
   ./scripts/pi shortcuts-install
   ./scripts/pi bridge-audio off
   ./scripts/pi single-voice
+  ./scripts/pi satellite-channel 0
   ./scripts/pi logs satellite
   ./scripts/pi bridge-test "turn the studio lights off"
   ./scripts/pi room off --execute
@@ -156,7 +158,7 @@ case "$subcommand" in
     ;;
 
   voice-check)
-    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
     run_ssh_expect_with_sudo "echo '== recent satellite voice events ==' && journalctl -u wyoming-satellite.service -n 120 --no-pager | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|No speech detected|stt-no-text-recognized|String should have at most 500|Waiting for wake word' || true"
     ;;
@@ -223,6 +225,45 @@ PY"
 
   single-voice)
     run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && if grep -q '^AUDIO_RESPONSE_ENABLED=' .env; then sed -i 's/^AUDIO_RESPONSE_ENABLED=.*/AUDIO_RESPONSE_ENABLED=0/' .env; else printf '\nAUDIO_RESPONSE_ENABLED=0\n' >> .env; fi && grep '^AUDIO_RESPONSE_ENABLED=' .env && docker compose up -d"
+    ;;
+
+  satellite-channel)
+    if [[ $# -ne 1 ]]; then
+      echo "Usage: ./scripts/pi satellite-channel <auto|0|1>" >&2
+      exit 1
+    fi
+    voice_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env"
+    case "$1" in
+      auto)
+        channel_value=""
+        ;;
+      0|1)
+        channel_value="$1"
+        ;;
+      *)
+        echo "Usage: ./scripts/pi satellite-channel <auto|0|1>" >&2
+        exit 1
+        ;;
+    esac
+    if [[ -n "$channel_value" ]]; then
+      run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
+        if grep -q '^MIC_CHANNEL_INDEX=' '${voice_env_file}'; then sed -i \"s/^MIC_CHANNEL_INDEX=.*/MIC_CHANNEL_INDEX=${channel_value}/\" '${voice_env_file}'; else printf '\nMIC_CHANNEL_INDEX=${channel_value}\n' >> '${voice_env_file}'; fi; \
+        systemctl restart wyoming-satellite.service; \
+        grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS)=' '${voice_env_file}'; \
+        echo; systemctl status wyoming-satellite.service --no-pager; \
+      else \
+        echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
+      fi"
+    else
+      run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
+        if grep -q '^MIC_CHANNEL_INDEX=' '${voice_env_file}'; then sed -i \"s/^MIC_CHANNEL_INDEX=.*/MIC_CHANNEL_INDEX=/\" '${voice_env_file}'; else printf '\nMIC_CHANNEL_INDEX=\n' >> '${voice_env_file}'; fi; \
+        systemctl restart wyoming-satellite.service; \
+        grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS)=' '${voice_env_file}'; \
+        echo; systemctl status wyoming-satellite.service --no-pager; \
+      else \
+        echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
+      fi"
+    fi
     ;;
 
   cmd)
@@ -350,7 +391,7 @@ PY"
       if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=1/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=1\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=' '${voice_env_file}'; then sed -i \"s/^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=.*/MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0/\" '${voice_env_file}'; else printf '\nMIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=3/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=3\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
       systemctl restart wyoming-satellite.service; \
       grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS)=' '${voice_env_file}'; \
       echo; systemctl status wyoming-satellite.service --no-pager; \
