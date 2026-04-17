@@ -156,7 +156,11 @@ async def interpret_command(
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except UpstreamServiceError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning("Upstream service failure while processing command: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="I couldn't complete that in Home Assistant. Please try again.",
+        ) from exc
     except BridgeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

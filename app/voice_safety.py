@@ -39,7 +39,7 @@ def looks_like_repetition_loop(text: str) -> bool:
                 repeats += 1
                 cursor += phrase_len
 
-            if repeats >= 4:
+            if repeats >= 3:
                 return True
 
     unique_ratio = len(set(words)) / max(len(words), 1)
@@ -64,6 +64,8 @@ def sanitize_spoken_response(text: str, *, max_chars: int) -> str:
     lowered = normalized.lower()
     if "string should have at most" in lowered or "validation error" in lowered:
         return "I had trouble understanding that. Please try again."
+    if "failed to execute home assistant service" in lowered or "internal server error" in lowered:
+        return "I couldn't complete that in Home Assistant. Please try again."
 
     if looks_like_repetition_loop(normalized):
         return "I had trouble understanding that. Please try again."

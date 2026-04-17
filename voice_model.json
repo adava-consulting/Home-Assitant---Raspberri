@@ -1,5 +1,6 @@
 {
   "allowed_entities": [
+    "light.cuarto",
     "light.room",
     "light.studio"
   ],
@@ -30,6 +31,21 @@
     "switch.respeaker_lite_mute"
   ],
   "target_overrides": {
+    "light.cuarto": {
+      "aliases": [
+        "room light",
+        "room lights",
+        "bedroom light",
+        "bedroom lights",
+        "cuarto light",
+        "cuarto lights"
+      ],
+      "actions": [
+        "turn_on",
+        "turn_off",
+        "get_state"
+      ]
+    },
     "light.room": {
       "aliases": [
         "room light",

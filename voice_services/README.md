@@ -51,17 +51,21 @@ Default language/voice settings are:
 - Whisper beam size: `1`
 - Whisper CPU threads: `4`
 - Whisper initial prompt: biased toward room, studio, and all-lights commands
-- Whisper VAD minimum speech: `200 ms`
-- Whisper VAD minimum silence: `700 ms`
+- Whisper VAD filter: disabled by default in this project because low capture
+  levels on the ReSpeaker were causing full commands to be discarded as silence
 - Piper voice: `en_US-lessac-medium`
 - Wake word: `hey_jarvis`
-- openWakeWord threshold: `0.35` to reduce missed activations in this room
+- openWakeWord threshold: `0.20` to favor first-try activations on this ReSpeaker setup
 - openWakeWord trigger level: `1`
 - openWakeWord refractory: `1.0` second
-- Wake refractory: `1` second for faster re-trigger after short or empty wake-ups
+- Wake refractory: `2` seconds on the satellite side
+- Microphone auto gain: `15`
+- Microphone noise suppression: `0`
+- Microphone volume multiplier: `4.0`
+- Microphone channel index: auto-select from the stereo capture stream
 - Microphone mute after wake beep: `0.0` seconds so the command start is not clipped
-- Streaming watchdog timeout: `0` by default while tuning wake word reliability
-- No-speech restart timeout: `0` by default to avoid long reconnect gaps after empty wake-ups
+- Streaming watchdog timeout: `8` seconds
+- No-speech restart timeout: `3` seconds to recover quickly from false wakes that never reach STT
 
 ## Important note about transcription quality
 
@@ -84,7 +88,8 @@ For this repo, the safer first cut is:
 - English Whisper for transcription, using at least `base-int8` for better command accuracy
 - lower Whisper beam size for faster decoding on Raspberry Pi CPU
 - a small initial prompt with likely home commands to reduce weird STT substitutions
-- shorter Whisper VAD silence windows so commands close faster after you stop talking
+- no Whisper VAD filtering by default because the ReSpeaker capture in this room
+  was quiet enough that VAD sometimes discarded the full spoken command
 - Piper for local speech output
 
 If tiny Whisper is still inaccurate after the microphone is tuned, the next step
@@ -196,25 +201,37 @@ satellite launch command again.
 
 ## No-speech timeout after wake word
 
-By default this repo keeps the no-speech restart disabled:
+By default this repo uses a short no-speech restart:
 
 Stable default:
+
+```bash
+SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=5
+```
+
+This helps the satellite recover quickly after a false wake that never turns
+into real speech.
+
+If you want to disable that behavior entirely:
 
 ```bash
 SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0
 ```
 
-This avoids long reconnect gaps after an empty wake-up.
-
-If you specifically want aggressive recovery from empty wake-ups, you can enable
-a short restart window:
-
-```bash
-SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=3
-```
-
 With that enabled, the hook script starts a short timer on wake detection. If
 the user does not actually begin speaking before the timeout, the satellite
+
+## Local Whisper hotfix
+
+This repo intentionally builds the `whisper` service from
+[`voice_services/whisper_patch`](./whisper_patch) instead of using the upstream
+image directly.
+
+Reason: upstream `rhasspy/wyoming-faster-whisper` currently has an open issue
+where `AudioStop` can arrive without prior `AudioChunk`, causing an
+`AssertionError` in `dispatch_handler.py` and making later wake cycles
+unreliable. The local patch returns an empty transcript instead of crashing so
+the service stays healthy across repeated wake attempts.
 process is terminated and systemd brings it back immediately. If
 `HOME_ASSISTANT_URL` and `HOME_ASSISTANT_TOKEN` are available through the
 project `.env`, the hook also nudges `assist_satellite.respeaker_lite` back to
@@ -236,7 +253,7 @@ satellite event hooks to it.
 If the satellite ever gets stuck in `listening` after a wake word, enable the
 watchdog that restarts it when streaming stays open too long.
 
-1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=0` while tuning wake word behavior
+1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=8` as the normal project default
 2. Install the helper scripts and both systemd units:
    - `satellite_watchdog_hook.sh`
    - `satellite_watchdog_check.sh`
@@ -249,8 +266,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now wyoming-satellite-watchdog.timer
 ```
 
-When you later need protection against real stuck-listening bugs, raise
-`SATELLITE_STREAMING_TIMEOUT_SECONDS` to a small non-zero value again.
+When you later need a more aggressive watchdog, raise
+`SATELLITE_STREAMING_TIMEOUT_SECONDS` above the default `8`.
 The satellite wrapper will automatically set hook commands that create a state
 file when streaming starts and clear it on transcript, stop, or error. The
 watchdog timer checks that state file every 10 seconds and restarts

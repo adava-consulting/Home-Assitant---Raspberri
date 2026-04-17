@@ -6,13 +6,22 @@ services:
     command:
       - --uri
       - tcp://0.0.0.0:10400
+      - --threshold
+      - ${WAKE_WORD_THRESHOLD:-0.20}
+      - --trigger-level
+      - ${WAKE_WORD_TRIGGER_LEVEL:-1}
+      - --refractory-seconds
+      - ${WAKE_WORD_REFRACTORY_SECONDS:-6.0}
       - --preload-model
       - ${WAKE_WORD_MODEL:-hey_jarvis}
     ports:
       - "10400:10400"
 
   whisper:
-    image: rhasspy/wyoming-whisper:latest
+    build:
+      context: ./whisper_patch
+      dockerfile: Dockerfile
+    image: ha-local/wyoming-whisper:patched
     container_name: wyoming-whisper
     restart: unless-stopped
     command:
@@ -26,7 +35,6 @@ services:
       - ${WHISPER_CPU_THREADS:-4}
       - --initial-prompt
       - "${WHISPER_INITIAL_PROMPT:-Turn on the lights. Turn off the lights. Turn all lights on. Turn all lights off. Turn on the room lights. Turn off the room lights. Turn on the studio lights. Turn off the studio lights. Set the studio lights to blue. Set the studio lights to 50 percent brightness.}"
-      - --vad-filter
       - --vad-min-speech-ms
       - ${WHISPER_VAD_MIN_SPEECH_MS:-200}
       - --vad-min-silence-ms

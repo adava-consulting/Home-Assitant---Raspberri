@@ -79,6 +79,29 @@ BRIGHTNESS_KEYWORD_VALUES: tuple[tuple[re.Pattern[str], int], ...] = (
 )
 
 
+def _collapse_repeated_word_spans(text: str) -> str:
+    words = text.split()
+    if len(words) < 6:
+        return text
+
+    changed = True
+    while changed:
+        changed = False
+        max_span = min(12, len(words) // 2)
+        for span in range(max_span, 2, -1):
+            i = 0
+            while i + (2 * span) <= len(words):
+                if words[i : i + span] == words[i + span : i + (2 * span)]:
+                    del words[i + span : i + (2 * span)]
+                    changed = True
+                    break
+                i += 1
+            if changed:
+                break
+
+    return " ".join(words)
+
+
 def _normalize(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text.lower())
     normalized = "".join(char for char in normalized if not unicodedata.combining(char))
@@ -98,6 +121,22 @@ def _normalize(text: str) -> str:
 
     updated = re.sub(r"\ball\s+of\s+(?:the\s+)?lights\b", "all lights", updated)
     updated = re.sub(r"\bthe\s+all\s+lights\b", "all lights", updated)
+    # Whisper can occasionally produce contradictory split phrases such as
+    # "turn on the room lights off". Prefer the trailing final state because it
+    # matches the user's requested outcome more often than the stray leading verb.
+    updated = re.sub(
+        r"\b(turn|switch|power)\s+on\s+((?:\w+\s+){0,8}?)off\b",
+        r"\1 off \2",
+        updated,
+    )
+    updated = re.sub(
+        r"\b(turn|switch|power)\s+off\s+((?:\w+\s+){0,8}?)on\b",
+        r"\1 on \2",
+        updated,
+    )
+    # Whisper can occasionally duplicate the spoken command back-to-back,
+    # e.g. "turn the room lights off turn the room lights off".
+    updated = _collapse_repeated_word_spans(updated)
     updated = re.sub(r"\s+", " ", updated).strip()
     return updated
 

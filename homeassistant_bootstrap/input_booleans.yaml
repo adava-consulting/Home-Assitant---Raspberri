@@ -13,3 +13,8 @@ guest_mode:
 bedtime_mode:
   name: Bedtime Mode
   icon: mdi:sleep
+
+assist_voice_reply_enabled:
+  name: Assist Voice Reply Enabled
+  icon: mdi:text-to-speech
+  initial: false

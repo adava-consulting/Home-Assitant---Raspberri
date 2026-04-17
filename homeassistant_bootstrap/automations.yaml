@@ -17,5 +17,13 @@
         assistant_reply: >-
           {% set result = bridge_result if bridge_result is defined and bridge_result is mapping else {} %}
           {{ result.get("assistant_response", "I had trouble processing that command.") }}
-    - set_conversation_response: "{{ assistant_reply }}"
+        spoken_reply_enabled: "{{ is_state('input_boolean.assist_voice_reply_enabled', 'on') }}"
+    - variables:
+        final_assistant_reply: >-
+          {% if spoken_reply_enabled and (assistant_reply | trim | length > 0) %}
+          {{ assistant_reply }}
+          {% else %}
+          {{ '' }}
+          {% endif %}
+    - set_conversation_response: "{{ final_assistant_reply }}"
   mode: single
