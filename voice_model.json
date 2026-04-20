@@ -33,10 +33,6 @@
   "target_overrides": {
     "light.cuarto": {
       "aliases": [
-        "room light",
-        "room lights",
-        "bedroom light",
-        "bedroom lights",
         "cuarto light",
         "cuarto lights"
       ],

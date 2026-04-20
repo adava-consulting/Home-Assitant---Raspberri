@@ -55,17 +55,19 @@ Default language/voice settings are:
   levels on the ReSpeaker were causing full commands to be discarded as silence
 - Piper voice: `en_US-lessac-medium`
 - Wake word: `hey_jarvis`
-- openWakeWord threshold: `0.20` to favor first-try activations on this ReSpeaker setup
+- openWakeWord threshold: `0.17` to favor first-try activations on this ReSpeaker setup,
+  especially after long idle periods where the first wake was sometimes missed
 - openWakeWord trigger level: `1`
-- openWakeWord refractory: `1.0` second
-- Wake refractory: `2` seconds on the satellite side
+- openWakeWord refractory: `6.0` seconds
+- Wake refractory: `6` seconds on the satellite side
 - Microphone auto gain: `15`
 - Microphone noise suppression: `0`
 - Microphone volume multiplier: `4.0`
 - Microphone channel index: auto-select from the stereo capture stream
 - Microphone mute after wake beep: `0.0` seconds so the command start is not clipped
 - Streaming watchdog timeout: `8` seconds
-- No-speech restart timeout: `3` seconds to recover quickly from false wakes that never reach STT
+- No-speech restart timeout: `7` seconds so the first spoken words are less likely to be missed
+- Transcript timeout: `12` seconds so Whisper has enough time to finish short commands before the watchdog forces a restart
 
 ## Important note about transcription quality
 
@@ -206,11 +208,25 @@ By default this repo uses a short no-speech restart:
 Stable default:
 
 ```bash
-SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=5
+SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7
 ```
 
 This helps the satellite recover quickly after a false wake that never turns
 into real speech.
+
+## Transcript timeout after STT stops
+
+If STT ends but Whisper is still decoding, the satellite should wait long
+enough for the transcript to come back before forcing a recovery.
+
+Stable default:
+
+```bash
+SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12
+```
+
+This gives short home-automation commands enough time to finish decoding on the
+Pi without leaving the satellite stuck for too long when Whisper actually hangs.
 
 If you want to disable that behavior entirely:
 

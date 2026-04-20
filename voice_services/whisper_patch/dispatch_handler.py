@@ -15,6 +15,7 @@ from wyoming.server import AsyncEventHandler
 
 from .const import Transcriber
 from .models import ModelLoader
+from .transcript_safety import sanitize_transcript_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -116,6 +117,14 @@ class DispatchEventHandler(AsyncEventHandler):
                 beam_size=self._loader.beam_size,
                 initial_prompt=self._loader.initial_prompt,
             )
+            sanitized_text = sanitize_transcript_text(text, max_chars=500)
+            if sanitized_text != text:
+                _LOGGER.warning(
+                    "Sanitized suspicious transcript from %s to %s characters",
+                    len(text),
+                    len(sanitized_text),
+                )
+            text = sanitized_text
             _LOGGER.info(text)
             if not await self._safe_write_event(Transcript(text=text).event(), "Transcript"):
                 self._reset_request_state()

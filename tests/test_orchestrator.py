@@ -731,7 +731,7 @@ class CommandOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(plan.primary_intent.target, "light.real_room")
 
-    def test_local_interpreter_prefers_primary_room_alias_target_when_both_are_available(self):
+    def test_local_interpreter_prefers_light_room_for_room_aliases(self):
         interpreter = LocalInterpreter(FakeSettings())
         target_capabilities = build_target_capabilities_from_lists(
             allowed_entities=["light.cuarto", "light.room", "light.studio"],
@@ -739,7 +739,7 @@ class CommandOrchestratorTests(unittest.TestCase):
             allowed_scripts=[],
             target_overrides={
                 "light.cuarto": {
-                    "aliases": ["room lights", "bedroom lights", "cuarto lights"],
+                    "aliases": ["cuarto lights"],
                     "actions": ["turn_on", "turn_off", "get_state"],
                 },
                 "light.room": {
@@ -780,7 +780,98 @@ class CommandOrchestratorTests(unittest.TestCase):
 
         plan = asyncio.run(interpreter.interpret("turn the room lights on", context))
 
+        self.assertEqual(plan.primary_intent.target, "light.room")
+
+    def test_local_interpreter_routes_cuarto_aliases_to_light_cuarto(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.cuarto", "light.room"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.cuarto": {
+                    "aliases": ["cuarto lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                },
+                "light.room": {
+                    "aliases": ["room lights", "bedroom lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                },
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.cuarto", "light.room"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "states": [
+                    {
+                        "entity_id": "light.cuarto",
+                        "state": "off",
+                        "attributes": {"friendly_name": "Cuarto"},
+                    },
+                    {
+                        "entity_id": "light.room",
+                        "state": "off",
+                        "attributes": {"friendly_name": "Room"},
+                    },
+                ],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("turn the cuarto lights on", context))
+
         self.assertEqual(plan.primary_intent.target, "light.cuarto")
+
+    def test_local_interpreter_prefers_last_conflicting_action_for_room_light(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {
+                    "aliases": ["room lights", "bedroom lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                },
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "states": [
+                    {
+                        "entity_id": "light.room",
+                        "state": "off",
+                        "attributes": {"friendly_name": "Room"},
+                    },
+                ],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(
+            interpreter.interpret(
+                "turn off the room lights on turn on the room lights",
+                context,
+            )
+        )
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.room")
 
     def test_context_includes_previous_states(self):
         interpreter = ContextCapturingInterpreter(single_action_plan("turn_on", "light.living_room"))
@@ -1504,6 +1595,40 @@ class InterpreterFactoryTests(unittest.TestCase):
         plan = asyncio.run(interpreter.interpret("turn off all lights", context))
 
         self.assertEqual([intent.target for intent in plan.actions], ["light.studio"])
+
+    def test_local_interpreter_rejects_specific_room_request_when_only_studio_is_available(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "states": [
+                    {
+                        "entity_id": "light.studio",
+                        "state": "off",
+                        "attributes": {"entity_id": ["light.recording_studio_door_garden", "light.led_bulb_w509z2"]},
+                    },
+                ],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        with self.assertRaises(ValidationError):
+            asyncio.run(interpreter.interpret("turn the room lights off", context))
 
     def test_local_interpreter_parses_medium_brightness(self):
         interpreter = LocalInterpreter(FakeSettings())

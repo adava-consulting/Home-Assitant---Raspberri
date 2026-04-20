@@ -146,6 +146,17 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return bool(escaped and re.search(rf"\b{escaped}\b", text))
 
 
+def _last_phrase_position(text: str, phrase: str) -> int:
+    escaped = re.escape(phrase.strip())
+    if not escaped:
+        return -1
+
+    last_position = -1
+    for match in re.finditer(rf"\b{escaped}\b", text):
+        last_position = match.start()
+    return last_position
+
+
 class LocalInterpreter:
     """Simple fallback interpreter for common English commands."""
 
@@ -201,6 +212,9 @@ class LocalInterpreter:
                     rationale="Matched local light adjustment rule.",
                     schedule=schedule,
                 )
+
+            if self._looks_like_area_specific_light_request(normalized):
+                raise ValidationError("The requested lights are unavailable or not configured locally.")
 
         if self._looks_like_restore_request(normalized):
             target = self._find_restore_target(normalized, context, target_capabilities)
@@ -269,6 +283,9 @@ class LocalInterpreter:
                     rationale="Matched local entity rule.",
                     schedule=schedule,
                 )
+
+            if action in {"turn_on", "turn_off"} and self._looks_like_area_specific_light_request(normalized):
+                raise ValidationError("The requested lights are unavailable or not configured locally.")
 
         raise ValidationError(
             "No local rule matched the request. Add a clearer phrase or configure an Anthropic API key."
@@ -342,19 +359,32 @@ class LocalInterpreter:
             ("stop_cover", ("stop", "halt")),
         )
 
+        best_action: str | None = None
+        best_position = -1
+
         for action, keywords in direct_action_keywords:
-            if any(_contains_phrase(text, keyword) for keyword in keywords):
-                return action
+            action_last_position = max(
+                (_last_phrase_position(text, keyword) for keyword in keywords),
+                default=-1,
+            )
+            if action_last_position > best_position:
+                best_action = action
+                best_position = action_last_position
 
         split_action_patterns = (
             ("turn_off", re.compile(r"\b(?:turn|switch|power)\b(?:\s+\w+){0,5}\s+\boff\b")),
             ("turn_on", re.compile(r"\b(?:turn|switch|power)\b(?:\s+\w+){0,5}\s+\bon\b")),
         )
         for action, pattern in split_action_patterns:
-            if pattern.search(text):
-                return action
+            matches = list(pattern.finditer(text))
+            if not matches:
+                continue
+            action_last_position = matches[-1].start()
+            if action_last_position > best_position:
+                best_action = action
+                best_position = action_last_position
 
-        return None
+        return best_action
 
     def _looks_like_recurring_routine_request(self, text: str) -> bool:
         patterns = (
@@ -423,6 +453,20 @@ class LocalInterpreter:
         )
         return any(re.search(pattern, text) for pattern in patterns)
 
+    def _looks_like_area_specific_light_request(self, text: str) -> bool:
+        if self._looks_like_all_home_lights(text):
+            return False
+
+        patterns = (
+            r"\b(?:turn|switch|power|shut)\s+(?:on|off)\s+(?:the\s+)?(?!lights\b)(?!all\b)(?!house\b)(?!home\b)(?:\w+\s+){1,4}lights\b",
+            r"\b(?:turn|switch|power|shut)\s+(?:the\s+)?(?!lights\b)(?!all\b)(?!house\b)(?!home\b)(?:\w+\s+){1,4}lights\s+(?:on|off)\b",
+            r"\b(?:set|make|dim|brighten)\s+(?:the\s+)?(?!lights\b)(?!all\b)(?!house\b)(?!home\b)(?:\w+\s+){1,4}lights\b",
+            r"\blights\s+(?:in|of)\s+(?:the\s+)?(?!house\b)(?!home\b)(?!casa\b)(?:\w+\s*){1,4}\b",
+            r"\b(?:enciende|encienda|encender|prende|prenda|prender|apaga|apague|apagar|cambia|cambie|cambiar|pon|pone|poner)\s+(?:las\s+)?(?!luces\b)(?!todas\b)(?:\w+\s+){1,4}luces\b",
+            r"\bluces\s+de(?:l| la)?\s+(?!casa\b)(?:\w+\s*){1,4}\b",
+        )
+        return any(re.search(pattern, text) for pattern in patterns)
+
     def _should_target_all_home_lights(
         self,
         text: str,
@@ -433,6 +477,9 @@ class LocalInterpreter:
             return True
 
         if not self._looks_like_generic_lights_request(text):
+            return False
+
+        if self._looks_like_area_specific_light_request(text):
             return False
 
         specific_target = self._find_target_by_action(

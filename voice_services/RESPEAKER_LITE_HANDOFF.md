@@ -116,6 +116,13 @@ Because of that:
 The microphone alone will not solve poor open-ended transcription if the STT model
 is too weak.
 
+Current repo defaults that matter most for reliability:
+
+- `WAKE_WORD_THRESHOLD=0.17`
+- `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7`
+- `SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12`
+- `SND_VOLUME_MULTIPLIER=2.5`
+
 Recommended approach:
 
 - start with the better microphone
@@ -247,9 +254,9 @@ Recommended first-pass values:
 - `MIC_AUTO_GAIN=15`
 - `MIC_NOISE_SUPPRESSION=0`
 - `MIC_VOLUME_MULTIPLIER=4.0`
-- `SND_VOLUME_MULTIPLIER=1.0`
+- `SND_VOLUME_MULTIPLIER=2.5`
 - `MIC_CHANNEL_INDEX=` (leave blank so the satellite auto-selects the best channel)
-- `WAKE_WORD_THRESHOLD=0.20`
+- `WAKE_WORD_THRESHOLD=0.17`
 - `WAKE_WORD_TRIGGER_LEVEL=1`
 - `WAKE_WORD_REFRACTORY_SECONDS=6.0`
 - `WAKE_REFRACTORY_SECONDS=6`

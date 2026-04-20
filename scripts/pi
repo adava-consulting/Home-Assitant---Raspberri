@@ -234,15 +234,15 @@ PY"
       if grep -q '^SND_MIXER_CONTROL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_CONTROL=.*/SND_MIXER_CONTROL=PCM/\" '${voice_env_file}'; else printf '\nSND_MIXER_CONTROL=PCM\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_LEVEL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_LEVEL=.*/SND_MIXER_LEVEL=100%/\" '${voice_env_file}'; else printf '\nSND_MIXER_LEVEL=100%\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=5/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=5\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=6/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=6\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=6/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=6\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=.*/SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0/\" '${voice_env_file}'; else printf '\nSATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0\n' >> '${voice_env_file}'; fi; \
     else \
       echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
     fi; \
     if [ -f '${voice_services_env_file}' ]; then \
-      if grep -q '^WAKE_WORD_THRESHOLD=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.20/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.20\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WAKE_WORD_THRESHOLD=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.17/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.17\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WAKE_WORD_TRIGGER_LEVEL=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_TRIGGER_LEVEL=.*/WAKE_WORD_TRIGGER_LEVEL=1/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_TRIGGER_LEVEL=1\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=6.0/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=6.0\n' >> '${voice_services_env_file}'; fi; \
     fi; \
