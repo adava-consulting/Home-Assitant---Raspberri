@@ -60,6 +60,16 @@ class Settings(BaseSettings):
         "saved_scenes.json",
         alias="SAVED_SCENES_STORE_FILENAME",
     )
+    activity_log_enabled: bool = Field(True, alias="ACTIVITY_LOG_ENABLED")
+    activity_log_data_dir: str = Field(
+        "/home/claude-host-home/ha-command-bridge-data",
+        alias="ACTIVITY_LOG_DATA_DIR",
+    )
+    activity_log_store_filename: str = Field(
+        "activity_log.json",
+        alias="ACTIVITY_LOG_STORE_FILENAME",
+    )
+    activity_log_max_entries: int = Field(200, alias="ACTIVITY_LOG_MAX_ENTRIES")
     state_memory_enabled: bool = Field(True, alias="STATE_MEMORY_ENABLED")
     state_memory_data_dir: str = Field(
         "/home/claude-host-home/ha-command-bridge-data",
@@ -110,6 +120,15 @@ class Settings(BaseSettings):
         alias="AUDIO_RESPONSE_LOCAL_ACK_MODE",
     )
     audio_response_fast_ack_text: str = Field("Done.", alias="AUDIO_RESPONSE_FAST_ACK_TEXT")
+    assist_guard_enabled: bool = Field(True, alias="ASSIST_GUARD_ENABLED")
+    assist_guard_recent_wake_window_seconds: float = Field(
+        20.0,
+        alias="ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS",
+    )
+    assist_guard_state_file: str = Field(
+        "/home/claude-host-home/ha-command-bridge-data/assist_guard_state.json",
+        alias="ASSIST_GUARD_STATE_FILE",
+    )
     kokoro_model_path: str = Field("", alias="KOKORO_MODEL_PATH")
     kokoro_voices_path: str = Field("", alias="KOKORO_VOICES_PATH")
     kokoro_voice: str = Field("af_heart", alias="KOKORO_VOICE")
@@ -327,6 +346,14 @@ def saved_scenes_store_path(self: Settings) -> str:
 
 
 Settings.saved_scenes_store_path = saved_scenes_store_path
+
+
+@property
+def activity_log_store_path(self: Settings) -> str:
+    return str(Path(self.activity_log_data_dir) / self.activity_log_store_filename)
+
+
+Settings.activity_log_store_path = activity_log_store_path
 
 
 @property

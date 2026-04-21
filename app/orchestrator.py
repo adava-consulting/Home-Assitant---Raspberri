@@ -27,6 +27,8 @@ class CommandOrchestrator:
         saved_scenes: Any | None = None,
         state_memory: Any | None = None,
         audio_output: Any | None = None,
+        activity_log: Any | None = None,
+        assist_guard: Any | None = None,
     ):
         self._settings = settings
         self._home_assistant = home_assistant
@@ -36,19 +38,54 @@ class CommandOrchestrator:
         self._saved_scenes = saved_scenes
         self._state_memory = state_memory
         self._audio_output = audio_output
+        self._activity_log = activity_log
+        self._assist_guard = assist_guard
         self._timezone = ZoneInfo(settings.local_timezone)
         self._base_target_capabilities = build_target_capabilities(settings)
         self._weather_briefing = WeatherBriefingService(settings, home_assistant)
 
-    async def process(self, text: str, dry_run: bool) -> CommandResponse:
+    async def process(
+        self,
+        text: str,
+        dry_run: bool,
+        *,
+        source: str | None = None,
+    ) -> CommandResponse:
+        request_source = self._normalize_source(source)
+        original_text = str(text or "")
         try:
             text = sanitize_voice_input(text)
         except ValueError as exc:
             if str(exc) == "repetition_loop":
+                await self._record_activity(
+                    kind="command",
+                    source=request_source,
+                    text=original_text,
+                    dry_run=dry_run,
+                    status="failed",
+                    details={"error": "repetition_loop"},
+                )
                 raise ValidationError(
                     "The spoken command looked corrupted or repeated. Please try again."
                 ) from exc
             raise
+
+        assist_guard_details: dict[str, Any] = {}
+        if self._assist_guard is not None:
+            try:
+                assist_guard_payload = await self._assist_guard.validate_and_consume(request_source)
+            except ValidationError as exc:
+                await self._record_activity(
+                    kind="command",
+                    source=request_source,
+                    text=original_text,
+                    dry_run=dry_run,
+                    status="failed",
+                    details={"error": str(exc), "guard": "assist_recent_wake"},
+                )
+                raise
+            if isinstance(assist_guard_payload, dict):
+                assist_guard_details = assist_guard_payload
 
         logger.info("Input text: %s", text)
         forced_claude_request = extract_forced_claude_request(text)
@@ -63,13 +100,14 @@ class CommandOrchestrator:
                 await self._audio_output.enqueue(
                     str(briefing.get("spoken_response") or assistant_response)
                 )
-            return CommandResponse(
+            response = CommandResponse(
                 text=text,
                 actions=[],
                 assistant_response=assistant_response,
                 executed=False,
                 scheduled=False,
                 dry_run=dry_run,
+                source=request_source,
                 results=[
                     {
                         "service": "weather.briefing",
@@ -79,6 +117,13 @@ class CommandOrchestrator:
                 ],
                 rationale="Matched local weather briefing.",
             )
+            await self._record_command_response(
+                response,
+                source=request_source,
+                status="dry_run" if dry_run else "executed",
+                extra_details=assist_guard_details,
+            )
+            return response
 
         states = await self._home_assistant.get_states()
         target_capabilities = self._build_effective_target_capabilities(states)
@@ -118,7 +163,13 @@ class CommandOrchestrator:
         if forced_claude_request is None and self._saved_scenes is not None:
             saved_scene = await self._saved_scenes.match_scene_request(text)
             if saved_scene is not None:
-                return await self.activate_saved_scene(saved_scene, text=text, dry_run=dry_run)
+                return await self.activate_saved_scene(
+                    saved_scene,
+                    text=text,
+                    dry_run=dry_run,
+                    source=request_source,
+                    extra_details=assist_guard_details,
+                )
 
         plan = await self._interpreter.interpret(text, context)
         self._validate_plan(plan, target_capabilities)
@@ -254,7 +305,7 @@ class CommandOrchestrator:
                 )
             )
 
-        return CommandResponse(
+        response = CommandResponse(
             text=text,
             actions=plan.actions,
             assistant_response=assistant_response,
@@ -269,7 +320,21 @@ class CommandOrchestrator:
             scheduled_job_id=scheduled_job_id,
             routine_id=routine_id,
             saved_scene_id=saved_scene_id,
+            source=request_source,
         )
+        await self._record_command_response(
+            response,
+            source=request_source,
+            status=self._response_status(
+                dry_run=dry_run,
+                scheduled=scheduled,
+                routine_created=routine_created,
+                saved_scene_created=saved_scene_created,
+                executed=executed,
+            ),
+            extra_details=assist_guard_details,
+        )
+        return response
 
     async def activate_saved_scene(
         self,
@@ -277,7 +342,16 @@ class CommandOrchestrator:
         *,
         text: str,
         dry_run: bool,
+        source: str | None = None,
+        extra_details: dict[str, Any] | None = None,
     ) -> CommandResponse:
+        normalized_source = self._normalize_source(source)
+        assist_guard_details = dict(extra_details or {})
+        if self._assist_guard is not None and not assist_guard_details:
+            assist_guard_payload = await self._assist_guard.validate_and_consume(normalized_source)
+            if isinstance(assist_guard_payload, dict):
+                assist_guard_details = assist_guard_payload
+
         states = await self._home_assistant.get_states()
         target_capabilities = self._build_effective_target_capabilities(states)
         plan = ActionPlan(
@@ -325,7 +399,7 @@ class CommandOrchestrator:
                 )
             )
 
-        return CommandResponse(
+        response = CommandResponse(
             text=text,
             actions=plan.actions,
             assistant_response=assistant_response,
@@ -337,7 +411,92 @@ class CommandOrchestrator:
             results=results,
             rationale=plan.rationale,
             saved_scene_id=getattr(saved_scene, "scene_id", None),
+            source=normalized_source,
         )
+        await self._record_command_response(
+            response,
+            source=normalized_source,
+            status="dry_run" if dry_run else "executed",
+            extra_details=assist_guard_details,
+        )
+        return response
+
+    async def _record_command_response(
+        self,
+        response: CommandResponse,
+        *,
+        source: str,
+        status: str,
+        extra_details: dict[str, Any] | None = None,
+    ) -> None:
+        details = {
+            "executed": response.executed,
+            "scheduled": response.scheduled,
+            "routine_created": response.routine_created,
+            "saved_scene_created": response.saved_scene_created,
+            "scheduled_job_id": response.scheduled_job_id,
+            "routine_id": response.routine_id,
+            "saved_scene_id": response.saved_scene_id,
+        }
+        if extra_details:
+            details.update(extra_details)
+        await self._record_activity(
+            kind="command",
+            source=source,
+            text=response.text,
+            dry_run=response.dry_run,
+            status=status,
+            actions=response.actions,
+            details=details,
+        )
+
+    async def _record_activity(
+        self,
+        *,
+        kind: str,
+        source: str,
+        text: str,
+        dry_run: bool,
+        status: str,
+        actions: list[Intent] | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        if self._activity_log is None:
+            return
+        await self._activity_log.record(
+            kind=kind,
+            source=source,
+            text=text,
+            dry_run=dry_run,
+            status=status,
+            actions=actions,
+            details=details,
+        )
+
+    def _response_status(
+        self,
+        *,
+        dry_run: bool,
+        scheduled: bool,
+        routine_created: bool,
+        saved_scene_created: bool,
+        executed: bool,
+    ) -> str:
+        if dry_run:
+            return "dry_run"
+        if scheduled:
+            return "scheduled"
+        if routine_created:
+            return "routine_created"
+        if saved_scene_created:
+            return "saved_scene_created"
+        if executed:
+            return "executed"
+        return "failed"
+
+    def _normalize_source(self, source: str | None) -> str:
+        normalized = " ".join(str(source or "api").split()).lower()
+        return normalized[:80] or "api"
 
     def _build_prompt_target_capabilities(
         self,

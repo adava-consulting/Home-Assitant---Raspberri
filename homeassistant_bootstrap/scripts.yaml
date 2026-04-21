@@ -36,11 +36,68 @@ send_command_to_bridge:
       default: false
       selector:
         boolean:
+    source:
+      name: Source
+      description: Optional trace label for the request origin.
+      default: ha_script
+      selector:
+        text:
   sequence:
     - action: rest_command.command_bridge_interpret
       data:
         command_text: "{{ command_text }}"
         dry_run: "{{ dry_run | default(false) }}"
+        source: "{{ source | default('ha_script') }}"
+      response_variable: bridge_response
+      continue_on_error: true
+    - variables:
+        bridge_result: >-
+          {% set response = bridge_response if bridge_response is defined and bridge_response is mapping else {} %}
+          {% set content = response.get('content', {}) %}
+          {% set detail = content.get('detail') if content is mapping else none %}
+          {% set assistant_response = content.get('assistant_response') if content is mapping else none %}
+          {{
+            {
+              "status": response.get("status", 0),
+              "content": content,
+              "assistant_response": assistant_response
+                if assistant_response is string and assistant_response | length > 0
+                else detail
+                  if detail is string and detail | length > 0
+                  else "I had trouble processing that command."
+            }
+          }}
+    - stop: Bridge response captured
+      response_variable: bridge_result
+
+send_assist_command_to_bridge:
+  alias: Send Assist Command To Bridge
+  mode: queued
+  fields:
+    command_text:
+      name: Command text
+      description: Text that will be sent to the backend through the Assist-safe endpoint.
+      required: true
+      selector:
+        text:
+    dry_run:
+      name: Dry run
+      description: If enabled, the backend interprets the request without executing it.
+      default: false
+      selector:
+        boolean:
+    source:
+      name: Source
+      description: Optional Assist trace label for the request origin.
+      default: assist_conversation
+      selector:
+        text:
+  sequence:
+    - action: rest_command.command_bridge_interpret_assist
+      data:
+        command_text: "{{ command_text }}"
+        dry_run: "{{ dry_run | default(false) }}"
+        source: "{{ source | default('assist_conversation') }}"
       response_variable: bridge_response
       continue_on_error: true
     - variables:

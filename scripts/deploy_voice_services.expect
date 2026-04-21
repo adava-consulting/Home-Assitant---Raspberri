@@ -36,5 +36,5 @@ lappend rsync_args "$local_dir/" "$remote:$remote_dir/"
 run_with_password $password $rsync_args
 run_with_password $password [list ssh $remote "chmod +x $remote_dir/run_wyoming_satellite.sh $remote_dir/satellite_watchdog_hook.sh $remote_dir/satellite_watchdog_check.sh 2>/dev/null || true"]
 
-set deploy_cmd "docker rm -f wyoming-openwakeword wyoming-whisper wyoming-piper >/dev/null 2>&1 || true && cd $remote_dir && docker compose up -d && docker compose ps"
+set deploy_cmd "cd $remote_dir && docker compose up --build -d --remove-orphans && docker compose ps"
 run_with_password $password [list ssh $remote $deploy_cmd]

@@ -124,6 +124,8 @@ class DispatchEventHandler(AsyncEventHandler):
                     len(text),
                     len(sanitized_text),
                 )
+            if text and not sanitized_text:
+                _LOGGER.warning("Dropped suspicious transcript after safety filtering")
             text = sanitized_text
             _LOGGER.info(text)
             if not await self._safe_write_event(Transcript(text=text).event(), "Transcript"):

@@ -103,14 +103,10 @@ def sanitize_transcript_text(text: str, *, max_chars: int) -> str:
     if not normalized:
         return ""
 
-    sanitized = _collapse_repeated_word_spans(normalized)
+    if looks_like_repetition_loop(normalized):
+        return ""
 
-    if looks_like_repetition_loop(sanitized):
-        repeated_phrase = _extract_repeated_phrase_once(sanitized)
-        if repeated_phrase:
-            sanitized = repeated_phrase
-        else:
-            sanitized = " ".join(_normalized_text_key(sanitized).split()[:8])
+    sanitized = _collapse_repeated_word_spans(normalized)
 
     if max_chars > 0 and len(sanitized) > max_chars:
         trimmed = sanitized[:max_chars].rstrip(" ,;:-")

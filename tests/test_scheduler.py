@@ -65,12 +65,21 @@ class FixedPlanInterpreter:
         return self.plan
 
 
+class FakeActivityLog:
+    def __init__(self):
+        self.entries: list[dict] = []
+
+    async def record(self, **payload):
+        self.entries.append(payload)
+
+
 class SchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         fd, path = tempfile.mkstemp(prefix="scheduled-jobs-", suffix=".json")
         Path(path).unlink(missing_ok=True)
         self.store_path = path
         self.home_assistant = RecordingHomeAssistantClient()
+        self.activity_log = FakeActivityLog()
         self.settings = FakeSchedulerSettings(
             scheduler_store_path=self.store_path,
             allowed_entities=[
@@ -79,7 +88,11 @@ class SchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
                 "light.office_light_3",
             ],
         )
-        self.scheduler = SchedulerService(self.settings, self.home_assistant)
+        self.scheduler = SchedulerService(
+            self.settings,
+            self.home_assistant,
+            activity_log=self.activity_log,
+        )
         await self.scheduler.start()
 
     async def asyncTearDown(self):
@@ -181,3 +194,19 @@ class SchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending_jobs[0].text, "turn on office light 1 in 5 seconds")
         self.assertEqual(len(completed_jobs), 1)
         self.assertEqual(completed_jobs[0].text, "turn on office light 2 in 1 second")
+
+    async def test_completed_job_is_written_to_activity_log(self):
+        delayed_plan = ActionPlan(
+            actions=[Intent(action="turn_on", target="light.office_light_1", parameters={})],
+            schedule=ScheduleSpec(type="delay", delay_seconds=1),
+            rationale="Logged scheduled action",
+        )
+
+        await self.scheduler.schedule_plan("turn on office light 1 in 1 second", delayed_plan)
+
+        await asyncio.sleep(1.7)
+
+        self.assertEqual(len(self.activity_log.entries), 1)
+        self.assertEqual(self.activity_log.entries[0]["kind"], "scheduled_job")
+        self.assertEqual(self.activity_log.entries[0]["source"], "scheduled_job")
+        self.assertEqual(self.activity_log.entries[0]["status"], "executed")

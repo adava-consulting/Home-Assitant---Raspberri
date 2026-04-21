@@ -70,19 +70,19 @@
     },
     "scene.good_night": {
       "aliases": [
-        "good night",
-        "night mode",
         "sleep mode"
       ]
     },
     "scene.guest_mode": {
       "aliases": [
-        "guest mode",
-        "visitor mode"
+        "visitor scene"
       ]
     },
     "script.prepare_bedtime": {
       "aliases": [
+        "good night",
+        "night mode",
+        "prepare the house for bedtime",
         "prepare bedtime",
         "bedtime routine",
         "get the house ready for bed"
@@ -90,6 +90,8 @@
     },
     "script.welcome_guests": {
       "aliases": [
+        "guest mode",
+        "visitor mode",
         "welcome guests",
         "guest lights",
         "prepare for guests"

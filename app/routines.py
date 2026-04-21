@@ -34,10 +34,17 @@ class Routine(BaseModel):
 
 
 class RoutineService:
-    def __init__(self, settings: Any, home_assistant: Any, state_memory: Any | None = None):
+    def __init__(
+        self,
+        settings: Any,
+        home_assistant: Any,
+        state_memory: Any | None = None,
+        activity_log: Any | None = None,
+    ):
         self._settings = settings
         self._home_assistant = home_assistant
         self._state_memory = state_memory
+        self._activity_log = activity_log
         self._timezone = ZoneInfo(settings.local_timezone)
         self._store_path = Path(settings.routines_store_path)
         self._poll_interval = max(5.0, float(settings.routines_poll_interval_seconds))
@@ -214,10 +221,12 @@ class RoutineService:
                 await self._home_assistant.execute_plan(plan)
                 routine.last_run_at = datetime.now(self._timezone)
                 routine.error = None
+                await self._record_activity(routine, status="executed")
             except Exception as exc:  # pragma: no cover - upstream/network behavior
                 routine.last_run_at = datetime.now(self._timezone)
                 routine.error = str(exc)
                 logger.warning("Routine %s failed: %s", routine.routine_id, exc)
+                await self._record_activity(routine, status="failed")
 
             routine.next_run_at = self._next_run_at(
                 routine.routine,
@@ -329,3 +338,22 @@ class RoutineService:
         if len(normalized) <= 80:
             return normalized
         return f"{normalized[:77].rstrip()}..."
+
+    async def _record_activity(self, routine: Routine, *, status: str) -> None:
+        if self._activity_log is None:
+            return
+
+        await self._activity_log.record(
+            kind="routine",
+            source="routine",
+            text=routine.text,
+            dry_run=False,
+            status=status,
+            actions=routine.actions,
+            details={
+                "routine_id": routine.routine_id,
+                "name": routine.name,
+                "next_run_at": routine.next_run_at.isoformat() if routine.next_run_at else None,
+                "error": routine.error,
+            },
+        )

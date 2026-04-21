@@ -33,10 +33,17 @@ class ScheduledJob(BaseModel):
 
 
 class SchedulerService:
-    def __init__(self, settings: Any, home_assistant: Any, state_memory: Any | None = None):
+    def __init__(
+        self,
+        settings: Any,
+        home_assistant: Any,
+        state_memory: Any | None = None,
+        activity_log: Any | None = None,
+    ):
         self._settings = settings
         self._home_assistant = home_assistant
         self._state_memory = state_memory
+        self._activity_log = activity_log
         self._timezone = ZoneInfo(settings.local_timezone)
         self._store_path = Path(settings.scheduler_store_path)
         self._poll_interval = max(0.5, float(settings.scheduler_poll_interval_seconds))
@@ -145,21 +152,20 @@ class SchedulerService:
                 continue
             try:
                 logger.info("Executing scheduled job %s: %s", job.job_id, job.text)
+                plan = ActionPlan(actions=job.actions, rationale=job.rationale)
                 if self._state_memory is not None:
-                    await self._state_memory.capture_before_plan(
-                        ActionPlan(actions=job.actions, rationale=job.rationale)
-                    )
-                await self._home_assistant.execute_plan(
-                    ActionPlan(actions=job.actions, rationale=job.rationale)
-                )
+                    await self._state_memory.capture_before_plan(plan)
+                await self._home_assistant.execute_plan(plan)
                 job.status = "completed"
                 job.executed_at = datetime.now(self._timezone)
                 job.error = None
+                await self._record_activity(job, status="executed")
             except Exception as exc:  # pragma: no cover - upstream/network behavior
                 job.status = "failed"
                 job.executed_at = datetime.now(self._timezone)
                 job.error = str(exc)
                 logger.warning("Scheduled job %s failed: %s", job.job_id, exc)
+                await self._record_activity(job, status="failed")
 
         if due_jobs:
             async with self._lock:
@@ -203,3 +209,21 @@ class SchedulerService:
         if execute_at.tzinfo is None:
             return execute_at.replace(tzinfo=self._timezone)
         return execute_at.astimezone(self._timezone)
+
+    async def _record_activity(self, job: ScheduledJob, *, status: str) -> None:
+        if self._activity_log is None:
+            return
+
+        await self._activity_log.record(
+            kind="scheduled_job",
+            source="scheduled_job",
+            text=job.text,
+            dry_run=False,
+            status=status,
+            actions=job.actions,
+            details={
+                "job_id": job.job_id,
+                "due_at": job.due_at.isoformat(),
+                "error": job.error,
+            },
+        )

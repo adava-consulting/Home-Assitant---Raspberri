@@ -68,6 +68,11 @@ AllowedAction = Literal[
 class CommandRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     dry_run: bool = False
+    source: str | None = Field(default=None, max_length=80)
+
+
+class AssistCommandRequest(CommandRequest):
+    source: str | None = Field(default="assist_conversation", max_length=80)
 
 
 class Intent(BaseModel):
@@ -180,6 +185,7 @@ class CommandResponse(BaseModel):
     scheduled_job_id: str | None = None
     routine_id: str | None = None
     saved_scene_id: str | None = None
+    source: str | None = None
     intent: Intent | None = None
     result: dict[str, Any] | None = None
 
@@ -244,6 +250,43 @@ class ScheduledJobResponse(BaseModel):
     executed_at: datetime | None = None
     cancelled_at: datetime | None = None
     error: str | None = None
+
+
+ActivityEntryKind = Literal["command", "scheduled_job", "routine"]
+ActivityEntryStatus = Literal[
+    "executed",
+    "dry_run",
+    "scheduled",
+    "routine_created",
+    "saved_scene_created",
+    "failed",
+]
+
+
+class ActivityEntryResponse(BaseModel):
+    occurred_at: datetime
+    kind: ActivityEntryKind
+    source: str
+    text: str
+    dry_run: bool = False
+    status: ActivityEntryStatus
+    actions: list[Intent] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActivityListResponse(BaseModel):
+    count: int
+    entries: list[ActivityEntryResponse]
+
+
+class AssistGuardStateResponse(BaseModel):
+    enabled: bool
+    state: dict[str, Any]
+
+
+class SavedSceneActivateRequest(BaseModel):
+    dry_run: bool = False
+    source: str | None = Field(default=None, max_length=80)
 
 
 class ScheduledJobListResponse(BaseModel):

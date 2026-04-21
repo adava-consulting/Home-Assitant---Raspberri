@@ -750,9 +750,34 @@ Recommended commands:
 - `./scripts/pi lights-check`
   - shows whether `light.room` and `light.studio` really exist on the live Home Assistant instance
 - `./scripts/pi voice-check`
-  - shows current wake-word, Whisper, and satellite timing values
+  - shows current wake-word, Whisper, Assist guard, and satellite timing values
+- `./scripts/pi wake-debug`
+  - collects recent wake, transcript, and bridge log evidence for voice debugging
+- `./scripts/pi ghost-check`
+  - shows pending jobs, recent bridge activity, saved scenes, and Assist guard state
 - `./scripts/pi shortcuts-install`
   - installs local shell shortcuts like `hapi status` and `hapi room off --execute`
+
+## Assist Safety
+
+The bridge now keeps a small amount of voice-safety state so we can correlate:
+
+- recent wake detections
+- Assist-originated commands
+- executed bridge actions
+
+Relevant `.env` knobs:
+
+- `ASSIST_GUARD_ENABLED=1`
+- `ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=20`
+- `ACTIVITY_LOG_MAX_ENTRIES=200`
+
+Useful diagnostics:
+
+- `./scripts/pi ghost-check`
+- `./scripts/pi wake-debug`
+- `GET /activity`
+- `GET /assist-guard`
 
 ## Security
 

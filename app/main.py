@@ -7,18 +7,24 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.auth import request_has_valid_bridge_access
+from app.assist_guard import AssistGuardService
 from app.config import Settings, get_settings
 from app.audio_output import AudioOutputService
+from app.activity_log import ActivityLogService
 from app.errors import BridgeError, UpstreamServiceError, ValidationError
 from app.health import build_health_payload
 from app.home_assistant import HomeAssistantClient
 from app.interpreter_factory import build_interpreter
 from app.models import (
+    ActivityListResponse,
+    AssistCommandRequest,
+    AssistGuardStateResponse,
     CommandRequest,
     CommandResponse,
     RoutineListResponse,
     RoutineResponse,
     RoutineUpdateRequest,
+    SavedSceneActivateRequest,
     SavedSceneListResponse,
     SavedSceneResponse,
     ScheduledJobListResponse,
@@ -29,6 +35,9 @@ from app.routines import RoutineService
 from app.saved_scenes import SavedSceneService
 from app.scheduler import SchedulerService
 from app.state_memory import PreviousStateMemoryService
+
+
+logger = logging.getLogger(__name__)
 
 
 def _configure_logging(settings: Settings) -> None:
@@ -79,18 +88,24 @@ async def startup_event() -> None:
     app.state.interpreter_bundle = build_interpreter(settings)
     app.state.audio_output = AudioOutputService(settings)
     await app.state.audio_output.start()
+    app.state.assist_guard = AssistGuardService(settings)
+    await app.state.assist_guard.start()
+    app.state.activity_log = ActivityLogService(settings)
+    await app.state.activity_log.start()
     app.state.state_memory = PreviousStateMemoryService(settings, app.state.home_assistant)
     await app.state.state_memory.start()
     app.state.scheduler = SchedulerService(
         settings,
         app.state.home_assistant,
         state_memory=app.state.state_memory,
+        activity_log=app.state.activity_log,
     )
     await app.state.scheduler.start()
     app.state.routines = RoutineService(
         settings,
         app.state.home_assistant,
         state_memory=app.state.state_memory,
+        activity_log=app.state.activity_log,
     )
     await app.state.routines.start()
     app.state.saved_scenes = SavedSceneService(settings)
@@ -111,6 +126,12 @@ async def shutdown_event() -> None:
     state_memory = getattr(app.state, "state_memory", None)
     if state_memory is not None:
         await state_memory.stop()
+    activity_log = getattr(app.state, "activity_log", None)
+    if activity_log is not None:
+        await activity_log.stop()
+    assist_guard = getattr(app.state, "assist_guard", None)
+    if assist_guard is not None:
+        await assist_guard.stop()
     home_assistant = getattr(app.state, "home_assistant", None)
     if home_assistant is not None:
         await home_assistant.stop()
@@ -129,6 +150,8 @@ def get_orchestrator(request: Request) -> CommandOrchestrator:
         saved_scenes=request.app.state.saved_scenes,
         state_memory=request.app.state.state_memory,
         audio_output=request.app.state.audio_output,
+        activity_log=request.app.state.activity_log,
+        assist_guard=request.app.state.assist_guard,
     )
 
 
@@ -152,7 +175,11 @@ async def interpret_command(
     orchestrator: CommandOrchestrator = Depends(get_orchestrator),
 ) -> CommandResponse:
     try:
-        return await orchestrator.process(request.text, request.dry_run)
+        return await orchestrator.process(
+            request.text,
+            request.dry_run,
+            source=request.source,
+        )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except UpstreamServiceError as exc:
@@ -163,6 +190,52 @@ async def interpret_command(
         ) from exc
     except BridgeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/commands/assist", response_model=CommandResponse)
+async def interpret_assist_command(
+    request: AssistCommandRequest,
+    orchestrator: CommandOrchestrator = Depends(get_orchestrator),
+) -> CommandResponse:
+    assist_source = " ".join(str(request.source or "assist_conversation").split()).lower()
+    if not assist_source.startswith("assist_"):
+        raise HTTPException(status_code=400, detail="Assist commands must use an assist_* source.")
+
+    try:
+        return await orchestrator.process(
+            request.text,
+            request.dry_run,
+            source=assist_source,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UpstreamServiceError as exc:
+        logger.warning("Upstream service failure while processing assist command: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="I couldn't complete that in Home Assistant. Please try again.",
+        ) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/activity", response_model=ActivityListResponse)
+async def list_activity(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=200),
+) -> ActivityListResponse:
+    activity_log = request.app.state.activity_log
+    entries = await activity_log.list_entries(limit=limit)
+    return ActivityListResponse(count=len(entries), entries=entries)
+
+
+@app.get("/assist-guard", response_model=AssistGuardStateResponse)
+async def get_assist_guard_state(request: Request) -> AssistGuardStateResponse:
+    assist_guard = request.app.state.assist_guard
+    if assist_guard is None:
+        return AssistGuardStateResponse(enabled=False, state={})
+    state = await assist_guard.get_state()
+    return AssistGuardStateResponse(enabled=True, state=state)
 
 
 @app.get("/scheduled-jobs", response_model=ScheduledJobListResponse)
@@ -272,7 +345,11 @@ async def list_saved_scenes(
 
 
 @app.post("/saved-scenes/{scene_id}/activate", response_model=CommandResponse)
-async def activate_saved_scene(scene_id: str, request: Request) -> CommandResponse:
+async def activate_saved_scene(
+    scene_id: str,
+    request: Request,
+    activation: SavedSceneActivateRequest | None = None,
+) -> CommandResponse:
     saved_scenes = request.app.state.saved_scenes
     try:
         scene = await saved_scenes.get_scene(scene_id)
@@ -283,7 +360,12 @@ async def activate_saved_scene(scene_id: str, request: Request) -> CommandRespon
         raise HTTPException(status_code=409, detail=message) from exc
 
     orchestrator = get_orchestrator(request)
-    return await orchestrator.activate_saved_scene(scene, text=scene.name, dry_run=False)
+    return await orchestrator.activate_saved_scene(
+        scene,
+        text=scene.name,
+        dry_run=activation.dry_run if activation is not None else False,
+        source=activation.source if activation is not None else None,
+    )
 
 
 @app.delete("/saved-scenes/{scene_id}", response_model=SavedSceneResponse)

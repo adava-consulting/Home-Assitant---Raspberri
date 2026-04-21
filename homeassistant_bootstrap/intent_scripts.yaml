@@ -5,10 +5,11 @@ BridgeAllLightsOn:
   speech:
     text: Done.
   action:
-    - action: script.send_command_to_bridge
+    - action: script.send_assist_command_to_bridge
       data:
         command_text: "turn all lights on"
         dry_run: false
+        source: "assist_fast_intent:all_on"
 
 BridgeAllLightsOff:
   description: Fast local all-lights off request routed through the bridge.
@@ -17,10 +18,11 @@ BridgeAllLightsOff:
   speech:
     text: Done.
   action:
-    - action: script.send_command_to_bridge
+    - action: script.send_assist_command_to_bridge
       data:
         command_text: "turn all lights off"
         dry_run: false
+        source: "assist_fast_intent:all_off"
 
 BridgeRoomLightsOn:
   description: Fast local room-lights on request routed through the bridge.
@@ -29,10 +31,11 @@ BridgeRoomLightsOn:
   speech:
     text: Done.
   action:
-    - action: script.send_command_to_bridge
+    - action: script.send_assist_command_to_bridge
       data:
         command_text: "turn the room lights on"
         dry_run: false
+        source: "assist_fast_intent:room_on"
 
 BridgeRoomLightsOff:
   description: Fast local room-lights off request routed through the bridge.
@@ -41,10 +44,11 @@ BridgeRoomLightsOff:
   speech:
     text: Done.
   action:
-    - action: script.send_command_to_bridge
+    - action: script.send_assist_command_to_bridge
       data:
         command_text: "turn the room lights off"
         dry_run: false
+        source: "assist_fast_intent:room_off"
 
 BridgeStudioLightsOn:
   description: Fast local studio-lights on request routed through the bridge.
@@ -53,10 +57,11 @@ BridgeStudioLightsOn:
   speech:
     text: Done.
   action:
-    - action: script.send_command_to_bridge
+    - action: script.send_assist_command_to_bridge
       data:
         command_text: "turn the studio lights on"
         dry_run: false
+        source: "assist_fast_intent:studio_on"
 
 BridgeStudioLightsOff:
   description: Fast local studio-lights off request routed through the bridge.
@@ -65,10 +70,37 @@ BridgeStudioLightsOff:
   speech:
     text: Done.
   action:
-    - action: script.send_command_to_bridge
+    - action: script.send_assist_command_to_bridge
       data:
         command_text: "turn the studio lights off"
         dry_run: false
+        source: "assist_fast_intent:studio_off"
+
+BridgeStudioLightsBrightness50:
+  description: Fast local studio-lights brightness request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "set the studio lights to 50 percent brightness"
+        dry_run: false
+        source: "assist_fast_intent:studio_50_percent"
+
+BridgeStudioLightsBlue:
+  description: Fast local studio-lights blue color request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "set the studio lights to blue"
+        dry_run: false
+        source: "assist_fast_intent:studio_blue"
 
 BridgeGoodNight:
   description: Fast local bedtime routine for voice requests such as good night.
@@ -77,7 +109,11 @@ BridgeGoodNight:
   speech:
     text: Good night.
   action:
-    - action: script.prepare_bedtime
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "prepare the house for bedtime"
+        dry_run: false
+        source: "assist_fast_intent:good_night"
 
 BridgeGuestMode:
   description: Fast local guest routine for voice requests such as guest mode or welcome guests.
@@ -86,4 +122,8 @@ BridgeGuestMode:
   speech:
     text: Guest mode enabled.
   action:
-    - action: script.welcome_guests
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "welcome guests"
+        dry_run: false
+        source: "assist_fast_intent:guest_mode"

@@ -24,7 +24,7 @@ class WhisperTranscriptSafetyTests(unittest.TestCase):
 
         self.assertEqual(
             sanitize_transcript_text(text, max_chars=500),
-            "Turn off the lights.",
+            "",
         )
 
     def test_sanitize_transcript_preserves_normal_command(self):

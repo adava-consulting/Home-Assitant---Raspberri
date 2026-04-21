@@ -44,6 +44,21 @@ intents:
           - "shut [the] studio lights off"
           - "<turn_off_verb> off [the] studio lamp"
           - "<turn_off_verb> off [the] studio lamps"
+  BridgeStudioLightsBrightness50:
+    data:
+      - sentences:
+          - "<turn_on_verb> on [the] studio lights to 50 percent brightness"
+          - "set [the] studio lights to 50 percent brightness"
+          - "set [the] studio lights to 50 percent"
+          - "dim [the] studio lights to 50 percent"
+          - "make [the] studio lights 50 percent"
+  BridgeStudioLightsBlue:
+    data:
+      - sentences:
+          - "set [the] studio lights to blue"
+          - "change [the] studio lights to blue"
+          - "change [the] color of [the] studio lights to blue"
+          - "make [the] studio lights blue"
   BridgeGoodNight:
     data:
       - sentences:

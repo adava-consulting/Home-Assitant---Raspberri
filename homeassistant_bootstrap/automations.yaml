@@ -8,10 +8,11 @@
   actions:
     - variables:
         command_text: "{{ trigger.slots.command_text }}"
-    - action: script.send_command_to_bridge
+    - action: script.send_assist_command_to_bridge
       data:
         command_text: "{{ command_text }}"
         dry_run: false
+        source: "assist_conversation"
       response_variable: bridge_result
     - variables:
         assistant_reply: >-

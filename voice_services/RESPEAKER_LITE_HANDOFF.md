@@ -119,8 +119,13 @@ is too weak.
 Current repo defaults that matter most for reliability:
 
 - `WAKE_WORD_THRESHOLD=0.17`
+- `WHISPER_BEAM_SIZE=3`
+- `WHISPER_INITIAL_PROMPT` now explicitly prefers no text over guessing and keeps only a short list of common room/studio commands
+- `WAKE_WORD_REFRACTORY_SECONDS=8.0`
+- `WAKE_REFRACTORY_SECONDS=8`
 - `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7`
 - `SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12`
+- `SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2`
 - `SND_VOLUME_MULTIPLIER=2.5`
 
 Recommended approach:
@@ -257,10 +262,12 @@ Recommended first-pass values:
 - `SND_VOLUME_MULTIPLIER=2.5`
 - `MIC_CHANNEL_INDEX=` (leave blank so the satellite auto-selects the best channel)
 - `WAKE_WORD_THRESHOLD=0.17`
+- `WHISPER_BEAM_SIZE=3`
 - `WAKE_WORD_TRIGGER_LEVEL=1`
-- `WAKE_WORD_REFRACTORY_SECONDS=6.0`
-- `WAKE_REFRACTORY_SECONDS=6`
-- `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=5`
+- `WAKE_WORD_REFRACTORY_SECONDS=8.0`
+- `WAKE_REFRACTORY_SECONDS=8`
+- `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7`
+- `SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2`
 
 If the transcription is too quiet:
 

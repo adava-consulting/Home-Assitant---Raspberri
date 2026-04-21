@@ -5,4 +5,5 @@ __pycache__/
 .env
 credentials.env
 pi_debug/
+pi_audit/
 .pi.env

@@ -48,9 +48,9 @@ Default language/voice settings are:
 
 - Whisper language: `en`
 - Whisper model: `base-int8`
-- Whisper beam size: `1`
+- Whisper beam size: `3`
 - Whisper CPU threads: `4`
-- Whisper initial prompt: biased toward room, studio, and all-lights commands
+- Whisper initial prompt: conservative home-automation guidance that tells the model to prefer no text over guessing and keeps only a short list of common room/studio commands for context
 - Whisper VAD filter: disabled by default in this project because low capture
   levels on the ReSpeaker were causing full commands to be discarded as silence
 - Piper voice: `en_US-lessac-medium`
@@ -58,8 +58,8 @@ Default language/voice settings are:
 - openWakeWord threshold: `0.17` to favor first-try activations on this ReSpeaker setup,
   especially after long idle periods where the first wake was sometimes missed
 - openWakeWord trigger level: `1`
-- openWakeWord refractory: `6.0` seconds
-- Wake refractory: `6` seconds on the satellite side
+- openWakeWord refractory: `8.0` seconds
+- Wake refractory: `8` seconds on the satellite side
 - Microphone auto gain: `15`
 - Microphone noise suppression: `0`
 - Microphone volume multiplier: `4.0`
@@ -68,6 +68,7 @@ Default language/voice settings are:
 - Streaming watchdog timeout: `8` seconds
 - No-speech restart timeout: `7` seconds so the first spoken words are less likely to be missed
 - Transcript timeout: `12` seconds so Whisper has enough time to finish short commands before the watchdog forces a restart
+- Post-transcript self-trigger restart window: `2` seconds so we only reset on the immediate false second wake, not on a real follow-up request a few seconds later
 
 ## Important note about transcription quality
 
@@ -88,14 +89,18 @@ For this repo, the safer first cut is:
 - better audio capture from the ReSpeaker Lite
 - local wake word detection
 - English Whisper for transcription, using at least `base-int8` for better command accuracy
-- lower Whisper beam size for faster decoding on Raspberry Pi CPU
-- a small initial prompt with likely home commands to reduce weird STT substitutions
+- a slightly wider Whisper beam to better separate short `on/off` commands on Raspberry Pi CPU
+- a small, conservative initial prompt that helps with common commands without encouraging aggressive guessing
 - no Whisper VAD filtering by default because the ReSpeaker capture in this room
   was quiet enough that VAD sometimes discarded the full spoken command
 - Piper for local speech output
 
-If tiny Whisper is still inaccurate after the microphone is tuned, the next step
+If `base-int8` is still inaccurate after the microphone is tuned, the next step
 should be a stronger English model, not a return to manual YAML editing.
+
+The satellite wrapper also waits for the local wake service port to become
+reachable before it fully starts. That makes redeploys and reboots calmer when
+`openwakeword` is still coming up.
 
 ## Current setup steps
 
@@ -106,7 +111,7 @@ The microphone is connected, so the practical setup order is:
 ```bash
 cd /home/lucas/ha-command-bridge/voice_services
 cp wyoming_services.env.example .env
-docker compose up -d
+docker compose up --build -d
 docker compose ps
 ```
 
@@ -145,6 +150,20 @@ docker logs --tail 20 wyoming-piper
 systemctl status wyoming-satellite.service --no-pager -l
 ss -ltn | egrep '10200|10300|10400|10700'
 ```
+
+When using the helper scripts from this repo, recent logs are easier to read if
+you keep the default time window and only ask for older history when needed:
+
+```bash
+./scripts/pi wake-debug
+./scripts/pi voice-check
+./scripts/pi logs satellite --since 2h
+./scripts/pi logs whisper --all
+./scripts/pi debug-clean --older-than 24h
+```
+
+That keeps routine checks focused on fresh events while still letting you keep
+older journal history for deep diagnosis.
 
 ## Optional listening beep on the headphone jack
 
@@ -231,7 +250,7 @@ Pi without leaving the satellite stuck for too long when Whisper actually hangs.
 If you want to disable that behavior entirely:
 
 ```bash
-SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0
+SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0
 ```
 
 With that enabled, the hook script starts a short timer on wake detection. If
@@ -282,8 +301,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now wyoming-satellite-watchdog.timer
 ```
 
-When you later need a more aggressive watchdog, raise
-`SATELLITE_STREAMING_TIMEOUT_SECONDS` above the default `8`.
+When you later need a more aggressive watchdog, lower
+`SATELLITE_STREAMING_TIMEOUT_SECONDS` below the default `8`.
 The satellite wrapper will automatically set hook commands that create a state
 file when streaming starts and clear it on transcript, stop, or error. The
 watchdog timer checks that state file every 10 seconds and restarts

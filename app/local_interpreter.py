@@ -181,8 +181,15 @@ class LocalInterpreter:
         if self._looks_like_saved_scene_request(normalized):
             raise ValidationError("Saved scene requests require the intelligent interpreter.")
 
+        extracted_action: str | None = None
         light_parameters = self._extract_light_parameters(normalized)
         if light_parameters:
+            extracted_action = self._extract_action(normalized)
+            if extracted_action == "turn_off":
+                raise ValidationError(
+                    "Local rules cannot safely combine turning lights off with brightness or color changes."
+                )
+
             if self._should_target_all_home_lights(
                 normalized,
                 target_capabilities,
@@ -228,21 +235,21 @@ class LocalInterpreter:
                     return restore_plan
             raise ValidationError("No previous state is available for that target.")
 
-        scene = self._find_target_by_action(normalized, target_capabilities, "activate_scene")
-        if scene:
-            return self._single_action_plan(
-                action="activate_scene",
-                target=scene,
-                rationale="Matched local scene rule.",
-                schedule=schedule,
-            )
-
         script = self._find_target_by_action(normalized, target_capabilities, "run_script")
         if script:
             return self._single_action_plan(
                 action="run_script",
                 target=script,
                 rationale="Matched local script rule.",
+                schedule=schedule,
+            )
+
+        scene = self._find_target_by_action(normalized, target_capabilities, "activate_scene")
+        if scene:
+            return self._single_action_plan(
+                action="activate_scene",
+                target=scene,
+                rationale="Matched local scene rule.",
                 schedule=schedule,
             )
 
@@ -256,7 +263,7 @@ class LocalInterpreter:
                     schedule=schedule,
                 )
 
-        action = self._extract_action(normalized)
+        action = extracted_action if extracted_action is not None else self._extract_action(normalized)
         if action:
             if action in {"turn_on", "turn_off"} and self._should_target_all_home_lights(
                 normalized,
@@ -448,13 +455,21 @@ class LocalInterpreter:
             r"\b(?:turn|switch|power)\s+(?:on|off)\s+(?:the\s+)?lights\b",
             r"\b(?:turn|switch|power)\s+all\s+lights\s+(?:on|off)\b",
             r"\b(?:shut)\s+off\s+(?:the\s+)?lights\b",
-            r"\blights\s+(?:on|off)\b",
             r"\b(?:turn|switch|power)\s+(?:the\s+)?lights\s+(?:on|off)\b",
+            r"^(?:the\s+)?lights\s+(?:on|off)$",
         )
         return any(re.search(pattern, text) for pattern in patterns)
 
     def _looks_like_area_specific_light_request(self, text: str) -> bool:
         if self._looks_like_all_home_lights(text):
+            return False
+
+        generic_bare_light_patterns = (
+            r"\b(?:turn|switch|power|shut)\s+(?:on|off)\s+(?:the\s+)?lights\b",
+            r"\b(?:turn|switch|power|shut)\s+(?:the\s+)?lights\s+(?:on|off)\b",
+            r"^(?:the\s+)?lights\s+(?:on|off)$",
+        )
+        if any(re.search(pattern, text) for pattern in generic_bare_light_patterns):
             return False
 
         patterns = (

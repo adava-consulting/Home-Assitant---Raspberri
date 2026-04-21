@@ -14,7 +14,9 @@ fi
 : "${WYOMING_SATELLITE_DIR:=/opt/wyoming-satellite}"
 : "${WAKE_URI:=tcp://127.0.0.1:10400}"
 : "${WAKE_WORD_NAME:=hey_jarvis}"
-: "${WAKE_REFRACTORY_SECONDS:=6}"
+: "${WAKE_REFRACTORY_SECONDS:=8}"
+: "${WAKE_SERVICE_READY_TIMEOUT_SECONDS:=20}"
+: "${WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS:=1}"
 : "${MIC_DEVICE_HINT:=ReSpeaker Lite}"
 : "${SND_DEVICE_HINT:=ReSpeaker Lite}"
 : "${MIC_AUTO_GAIN:=15}"
@@ -36,7 +38,8 @@ fi
 : "${SATELLITE_NO_SPEECH_TIMEOUT_SECONDS:=7}"
 : "${SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS:=12}"
 : "${SATELLITE_NO_SPEECH_STATE_FILE:=/tmp/wyoming-satellite-no-speech.state}"
-: "${SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS:=6}"
+: "${SATELLITE_TRANSCRIPT_TIMEOUT_STATE_FILE:=/tmp/wyoming-satellite-transcript.state}"
+: "${SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS:=2}"
 : "${SATELLITE_POST_TRANSCRIPT_STATE_FILE:=/tmp/wyoming-satellite-post-transcript.state}"
 : "${SATELLITE_WAIT_FOR_DEVICE_SECONDS:=5}"
 : "${SATELLITE_DEBUG:=0}"
@@ -120,6 +123,54 @@ configure_playback_mixer() {
   fi
 }
 
+tcp_service_ready() {
+  local uri="$1"
+
+  python3 - "$uri" <<'PY'
+import socket
+import sys
+from urllib.parse import urlparse
+
+uri = sys.argv[1]
+parsed = urlparse(uri)
+if parsed.scheme != "tcp" or not parsed.hostname or not parsed.port:
+    raise SystemExit(2)
+
+try:
+    with socket.create_connection((parsed.hostname, parsed.port), timeout=1):
+        pass
+except OSError:
+    raise SystemExit(1)
+PY
+}
+
+wait_for_tcp_service() {
+  local uri="$1"
+  local label="$2"
+
+  if [[ -z "$uri" ]]; then
+    return 0
+  fi
+
+  local deadline=$(( SECONDS + WAKE_SERVICE_READY_TIMEOUT_SECONDS ))
+  while (( SECONDS <= deadline )); do
+    if tcp_service_ready "$uri"; then
+      echo "Confirmed $label service is ready at $uri"
+      return 0
+    fi
+
+    if (( SECONDS >= deadline )); then
+      break
+    fi
+
+    echo "Waiting for $label service at $uri..."
+    sleep "$WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS"
+  done
+
+  echo "Timed out waiting for $label service at $uri after ${WAKE_SERVICE_READY_TIMEOUT_SECONDS}s" >&2
+  return 1
+}
+
 if [[ ! -x "$WYOMING_SATELLITE_DIR/script/run" ]]; then
   echo "wyoming-satellite launcher not found at $WYOMING_SATELLITE_DIR/script/run" >&2
   exit 1
@@ -158,8 +209,13 @@ fi
 if [[ "${SATELLITE_NO_SPEECH_TIMEOUT_SECONDS}" != "0" ]]; then
   rm -f "$SATELLITE_NO_SPEECH_STATE_FILE"
 fi
+rm -f "$SATELLITE_POST_TRANSCRIPT_STATE_FILE"
 if [[ -n "$WAKE_URI" ]]; then
+  wait_for_tcp_service "$WAKE_URI" "wake"
   OPTIONAL_ARGS+=(--wake-uri "$WAKE_URI")
+fi
+if [[ "${SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS}" != "0" ]]; then
+  rm -f "$SATELLITE_TRANSCRIPT_TIMEOUT_STATE_FILE"
 fi
 if [[ -n "$WAKE_WORD_NAME" ]]; then
   OPTIONAL_ARGS+=(--wake-word-name "$WAKE_WORD_NAME")
@@ -186,17 +242,30 @@ if [[ -n "$MIC_CHANNEL_INDEX" ]]; then
   MIC_OPTIONAL_ARGS+=(--mic-channel-index "$MIC_CHANNEL_INDEX")
 fi
 
-exec "$WYOMING_SATELLITE_DIR/script/run" \
-  --name "$SATELLITE_NAME" \
-  --uri "$SATELLITE_URI" \
-  --mic-command "$MIC_COMMAND" \
-  --mic-command-channels "$MIC_CAPTURE_CHANNELS" \
-  --snd-command "$SND_COMMAND" \
-  --mic-auto-gain "$MIC_AUTO_GAIN" \
-  --mic-noise-suppression "$MIC_NOISE_SUPPRESSION" \
-  --mic-volume-multiplier "$MIC_VOLUME_MULTIPLIER" \
-  --mic-seconds-to-mute-after-awake-wav "$MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV" \
-  --snd-volume-multiplier "$SND_VOLUME_MULTIPLIER" \
-  "${MIC_OPTIONAL_ARGS[@]}" \
-  "${OPTIONAL_ARGS[@]}" \
-  "${DEBUG_ARGS[@]}"
+COMMAND_ARGS=(
+  "$WYOMING_SATELLITE_DIR/script/run"
+  --name "$SATELLITE_NAME"
+  --uri "$SATELLITE_URI"
+  --mic-command "$MIC_COMMAND"
+  --mic-command-channels "$MIC_CAPTURE_CHANNELS"
+  --snd-command "$SND_COMMAND"
+  --mic-auto-gain "$MIC_AUTO_GAIN"
+  --mic-noise-suppression "$MIC_NOISE_SUPPRESSION"
+  --mic-volume-multiplier "$MIC_VOLUME_MULTIPLIER"
+  --mic-seconds-to-mute-after-awake-wav "$MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV"
+  --snd-volume-multiplier "$SND_VOLUME_MULTIPLIER"
+)
+
+if ((${#MIC_OPTIONAL_ARGS[@]})); then
+  COMMAND_ARGS+=("${MIC_OPTIONAL_ARGS[@]}")
+fi
+
+if ((${#OPTIONAL_ARGS[@]})); then
+  COMMAND_ARGS+=("${OPTIONAL_ARGS[@]}")
+fi
+
+if ((${#DEBUG_ARGS[@]})); then
+  COMMAND_ARGS+=("${DEBUG_ARGS[@]}")
+fi
+
+exec "${COMMAND_ARGS[@]}"

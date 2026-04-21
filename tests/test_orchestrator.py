@@ -1,6 +1,11 @@
 import asyncio
+import json
+import tempfile
+import time
 import unittest
+from pathlib import Path
 
+from app.assist_guard import AssistGuardService
 from app.capabilities import build_target_capabilities_from_lists
 from app.claude_code_cli import _select_prompt_targets, _select_visible_states
 from app.errors import UpstreamServiceError, ValidationError
@@ -58,6 +63,9 @@ class FakeSettings:
     audio_response_max_chars = 220
     audio_response_local_ack_mode = "descriptive"
     audio_response_fast_ack_text = "Done."
+    assist_guard_enabled = False
+    assist_guard_recent_wake_window_seconds = 20.0
+    assist_guard_state_file = "/tmp/test-assist-guard.json"
 
 
 class FakeHomeAssistantClient:
@@ -176,6 +184,14 @@ class FakeAudioOutput:
             self.messages.append(text)
 
 
+class FakeActivityLog:
+    def __init__(self):
+        self.entries: list[dict] = []
+
+    async def record(self, **payload):
+        self.entries.append(payload)
+
+
 def single_action_plan(
     action: str,
     target: str,
@@ -231,6 +247,84 @@ class CommandOrchestratorTests(unittest.TestCase):
         self.assertEqual(response.intent.target, "light.living_room")
         self.assertEqual(len(response.actions), 1)
         self.assertEqual(response.assistant_response, "I would turn on living room.")
+
+    def test_records_activity_source_for_executed_command(self):
+        activity_log = FakeActivityLog()
+        orchestrator = CommandOrchestrator(
+            FakeSettings(),
+            FakeHomeAssistantClient(),
+            FakeInterpreter(single_action_plan("turn_off", "light.living_room")),
+            activity_log=activity_log,
+        )
+
+        response = asyncio.run(
+            orchestrator.process(
+                "turn off the living room light",
+                dry_run=False,
+                source="assist_conversation",
+            )
+        )
+
+        self.assertTrue(response.executed)
+        self.assertEqual(response.source, "assist_conversation")
+        self.assertEqual(len(activity_log.entries), 1)
+        self.assertEqual(activity_log.entries[0]["kind"], "command")
+        self.assertEqual(activity_log.entries[0]["source"], "assist_conversation")
+        self.assertEqual(activity_log.entries[0]["status"], "executed")
+
+    def test_normalizes_activity_source_to_lowercase(self):
+        activity_log = FakeActivityLog()
+        orchestrator = CommandOrchestrator(
+            FakeSettings(),
+            FakeHomeAssistantClient(),
+            FakeInterpreter(single_action_plan("turn_off", "light.living_room")),
+            activity_log=activity_log,
+        )
+
+        response = asyncio.run(
+            orchestrator.process(
+                "turn off the living room light",
+                dry_run=False,
+                source=" Assist_Conversation ",
+            )
+        )
+
+        self.assertTrue(response.executed)
+        self.assertEqual(response.source, "assist_conversation")
+        self.assertEqual(activity_log.entries[0]["source"], "assist_conversation")
+
+    def test_rejects_assist_command_without_recent_wake(self):
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            state_path = Path(temp_dir_str) / "assist-guard.json"
+            settings = FakeSettings()
+            settings.assist_guard_enabled = True
+            settings.assist_guard_state_file = str(state_path)
+            activity_log = FakeActivityLog()
+            assist_guard = AssistGuardService(settings)
+            asyncio.run(assist_guard.start())
+
+            orchestrator = CommandOrchestrator(
+                settings,
+                FakeHomeAssistantClient(),
+                FakeInterpreter(single_action_plan("turn_off", "light.living_room")),
+                activity_log=activity_log,
+                assist_guard=assist_guard,
+            )
+
+            with self.assertRaises(ValidationError):
+                asyncio.run(
+                    orchestrator.process(
+                        "turn off the living room light",
+                        dry_run=False,
+                        source="assist_conversation",
+                    )
+                )
+
+            self.assertEqual(len(activity_log.entries), 1)
+            self.assertEqual(activity_log.entries[0]["status"], "failed")
+            self.assertEqual(activity_log.entries[0]["details"]["guard"], "assist_recent_wake")
+
+            asyncio.run(assist_guard.stop())
 
     def test_rejects_repetitive_corrupted_voice_input(self):
         orchestrator = CommandOrchestrator(
@@ -502,6 +596,117 @@ class CommandOrchestratorTests(unittest.TestCase):
         self.assertEqual(response.intent.target, "light.living_room")
         self.assertEqual(response.saved_scene_id, "scene-123")
         self.assertEqual(response.assistant_response, "Okay. I activated Movie mode.")
+
+    def test_activate_saved_scene_with_assist_source_requires_recent_wake(self):
+        saved_scene = SavedSceneResponse(
+            scene_id="scene-123",
+            text="create movie mode",
+            name="Movie mode",
+            aliases=["Movie mode"],
+            actions=[
+                Intent(
+                    action="turn_on",
+                    target="light.living_room",
+                    parameters={"brightness_pct": 40},
+                )
+            ],
+            created_at="2026-04-07T12:00:00-03:00",
+            updated_at="2026-04-07T12:00:00-03:00",
+            status="active",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            state_path = Path(temp_dir_str) / "assist-guard.json"
+            settings = FakeSettings()
+            settings.assist_guard_enabled = True
+            settings.assist_guard_state_file = str(state_path)
+            assist_guard = AssistGuardService(settings)
+            asyncio.run(assist_guard.start())
+            orchestrator = CommandOrchestrator(
+                settings,
+                FakeHomeAssistantClient(),
+                FakeInterpreter(single_action_plan("turn_on", "light.kitchen")),
+                scheduler=FakeScheduler(),
+                routines=FakeRoutines(),
+                saved_scenes=FakeSavedScenes(),
+                assist_guard=assist_guard,
+            )
+
+            with self.assertRaises(ValidationError):
+                asyncio.run(
+                    orchestrator.activate_saved_scene(
+                        saved_scene,
+                        text="Movie mode",
+                        dry_run=False,
+                        source="assist_saved_scene",
+                    )
+                )
+
+            asyncio.run(assist_guard.stop())
+
+    def test_saved_scene_voice_activation_keeps_assist_guard_details_in_activity_log(self):
+        saved_scene = SavedSceneResponse(
+            scene_id="scene-123",
+            text="create movie mode",
+            name="Movie mode",
+            aliases=["Movie mode"],
+            actions=[
+                Intent(
+                    action="turn_on",
+                    target="light.living_room",
+                    parameters={"brightness_pct": 40},
+                )
+            ],
+            created_at="2026-04-07T12:00:00-03:00",
+            updated_at="2026-04-07T12:00:00-03:00",
+            status="active",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            state_path = Path(temp_dir_str) / "assist-guard.json"
+            detection_ms = int(time.time() * 1000)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "last_detection_ms": detection_ms,
+                        "last_detection_at": "2026-04-20T00:00:00Z",
+                        "last_consumed_detection_ms": 0,
+                        "last_consumed_at": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = FakeSettings()
+            settings.assist_guard_enabled = True
+            settings.assist_guard_state_file = str(state_path)
+            activity_log = FakeActivityLog()
+            assist_guard = AssistGuardService(settings)
+            asyncio.run(assist_guard.start())
+            orchestrator = CommandOrchestrator(
+                settings,
+                FakeHomeAssistantClient(),
+                FakeInterpreter(single_action_plan("turn_on", "light.kitchen")),
+                scheduler=FakeScheduler(),
+                routines=FakeRoutines(),
+                saved_scenes=FakeSavedScenes(matched_scene=saved_scene),
+                activity_log=activity_log,
+                assist_guard=assist_guard,
+            )
+
+            response = asyncio.run(
+                orchestrator.process(
+                    "movie mode",
+                    dry_run=False,
+                    source="assist_conversation",
+                )
+            )
+
+            self.assertTrue(response.executed)
+            self.assertEqual(len(activity_log.entries), 1)
+            self.assertEqual(
+                activity_log.entries[0]["details"]["assist_guard_detection_ms"],
+                detection_ms,
+            )
+
+            asyncio.run(assist_guard.stop())
 
     def test_rejects_high_security_saved_scene(self):
         settings = FakeSettings()
@@ -1016,6 +1221,23 @@ class LocalInterpreterTests(unittest.TestCase):
         self.assertEqual(intent.primary_intent.action, "run_script")
         self.assertEqual(intent.primary_intent.target, "script.prepare_bedtime")
 
+    def test_matches_welcome_guests_script(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.welcome_guests"],
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("welcome guests", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.welcome_guests")
+
     def test_rejects_unknown_phrase(self):
         interpreter = LocalInterpreter(FakeSettings())
         context = type(
@@ -1513,6 +1735,66 @@ class InterpreterFactoryTests(unittest.TestCase):
         self.assertEqual(plan.primary_intent.target, "light.office")
         self.assertEqual(plan.primary_intent.parameters, {"brightness_pct": 50})
 
+    def test_local_interpreter_parses_turn_on_brightness_phrase(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("turn on the studio lights to 50 percent brightness", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.parameters, {"brightness_pct": 50})
+
+    def test_local_interpreter_parses_change_color_phrase(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("change the studio lights to blue", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.parameters, {"rgb_color": [0, 0, 255]})
+
     def test_local_interpreter_strips_wake_word_and_polite_filler(self):
         interpreter = LocalInterpreter(FakeSettings())
         target_capabilities = build_target_capabilities_from_lists(
@@ -1688,6 +1970,38 @@ class InterpreterFactoryTests(unittest.TestCase):
         self.assertEqual(plan.primary_intent.target, "light.room")
         self.assertEqual(plan.primary_intent.parameters, {"brightness_pct": 100})
 
+    def test_local_interpreter_rejects_turn_off_with_brightness_modifier(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        with self.assertRaisesRegex(ValidationError, "cannot safely combine turning lights off"):
+            asyncio.run(
+                interpreter.interpret(
+                    "turn off the studio lights to 50 percent brightness",
+                    context,
+                )
+            )
+
     def test_local_interpreter_parses_split_turn_off_phrase(self):
         interpreter = LocalInterpreter(FakeSettings())
         target_capabilities = build_target_capabilities_from_lists(
@@ -1745,6 +2059,42 @@ class InterpreterFactoryTests(unittest.TestCase):
 
         self.assertEqual(plan.primary_intent.target, "light.room")
         self.assertEqual(plan.primary_intent.action, "turn_off")
+
+    def test_local_interpreter_routes_good_night_to_bedtime_script_alias(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=[],
+            allowed_scenes=["scene.good_night"],
+            allowed_scripts=["script.prepare_bedtime"],
+            target_overrides={
+                "scene.good_night": {"aliases": ["sleep mode"]},
+                "script.prepare_bedtime": {
+                    "aliases": [
+                        "good night",
+                        "night mode",
+                        "prepare the house for bedtime",
+                    ],
+                },
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": ["scene.good_night"],
+                "allowed_scripts": ["script.prepare_bedtime"],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("good night", context))
+
+        self.assertEqual(plan.primary_intent.action, "run_script")
+        self.assertEqual(plan.primary_intent.target, "script.prepare_bedtime")
 
     def test_local_interpreter_collapses_duplicate_transcript_phrase(self):
         interpreter = LocalInterpreter(FakeSettings())

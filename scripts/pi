@@ -13,7 +13,11 @@ fi
 : "${PI_USER:=lucas}"
 : "${PI_PASSWORD:=}"
 : "${PI_REMOTE_BRIDGE_DIR:=/home/lucas/ha-command-bridge}"
+: "${PI_REMOTE_BRIDGE_DATA_DIR:=/home/lucas/ha-command-bridge-data}"
 : "${PI_REMOTE_BOOTSTRAP_DIR:=/home/lucas/homeassistant-bootstrap}"
+: "${PI_LOG_SINCE_DEFAULT:=30m}"
+: "${PI_DEBUG_RECORDING_DIR:=/tmp/wyoming-debug}"
+: "${PI_DEBUG_RECORDING_CLEAN_DEFAULT:=24h}"
 
 escape_single_quotes() {
   printf "%s" "$1" | sed "s/'/'\"'\"'/g"
@@ -42,22 +46,163 @@ run_ssh_expect_with_sudo() {
   run_ssh_expect "printf '%s\n' '${escaped_password}' | sudo -S bash -lc '$(escape_single_quotes "$command")'"
 }
 
+validate_duration_token() {
+  local value="$1"
+  if ! [[ "$value" =~ ^[0-9]+[smhd]$ ]]; then
+    echo "Unsupported duration '${value}'. Use values like 30m, 2h, or 1d." >&2
+    exit 1
+  fi
+}
+
+journal_since_expr() {
+  local value="$1"
+  if [[ "$value" =~ ^([0-9]+)([smhd])$ ]]; then
+    local amount="${BASH_REMATCH[1]}"
+    local unit="${BASH_REMATCH[2]}"
+    case "$unit" in
+      s) printf '%s seconds ago' "$amount" ;;
+      m) printf '%s minutes ago' "$amount" ;;
+      h) printf '%s hours ago' "$amount" ;;
+      d) printf '%s days ago' "$amount" ;;
+    esac
+    return 0
+  fi
+
+  printf '%s' "$value"
+}
+
+duration_to_find_minutes() {
+  local value="$1"
+  if ! [[ "$value" =~ ^([0-9]+)([smhd])$ ]]; then
+    echo "Unsupported duration '${value}'. Use values like 30m, 2h, or 1d." >&2
+    exit 1
+  fi
+
+  local amount="${BASH_REMATCH[1]}"
+  local unit="${BASH_REMATCH[2]}"
+  local minutes=0
+  case "$unit" in
+    s) minutes=$(( (amount + 59) / 60 )) ;;
+    m) minutes=$amount ;;
+    h) minutes=$(( amount * 60 )) ;;
+    d) minutes=$(( amount * 1440 )) ;;
+  esac
+
+  if (( minutes < 1 )); then
+    minutes=1
+  fi
+
+  printf '%s' "$minutes"
+}
+
+parse_recent_window_args() {
+  RECENT_WINDOW_MODE="since"
+  RECENT_WINDOW_SINCE="$PI_LOG_SINCE_DEFAULT"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all)
+        RECENT_WINDOW_MODE="all"
+        shift
+        ;;
+      --since)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --since" >&2
+          exit 1
+        fi
+        validate_duration_token "$2"
+        RECENT_WINDOW_SINCE="$2"
+        RECENT_WINDOW_MODE="since"
+        shift 2
+        ;;
+      *)
+        echo "Unexpected argument: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
+recent_window_description() {
+  if [[ "${RECENT_WINDOW_MODE}" == "all" ]]; then
+    printf 'all available history'
+    return 0
+  fi
+
+  printf 'last %s' "${RECENT_WINDOW_SINCE}"
+}
+
+docker_logs_recent_command() {
+  local container="$1"
+  local tail_count="$2"
+  local command="docker logs --tail ${tail_count}"
+  if [[ "${RECENT_WINDOW_MODE}" == "since" ]]; then
+    command+=" --since ${RECENT_WINDOW_SINCE}"
+  fi
+  command+=" ${container}"
+  printf '%s' "$command"
+}
+
+journalctl_recent_command() {
+  local unit="$1"
+  local tail_count="$2"
+  if [[ "${RECENT_WINDOW_MODE}" == "since" ]]; then
+    local journal_since
+    journal_since="$(journal_since_expr "${RECENT_WINDOW_SINCE}")"
+    printf 'journalctl -u %s --since "%s" -n %s --no-pager' "$unit" "$journal_since" "$tail_count"
+    return 0
+  fi
+
+  printf 'journalctl -u %s -n %s --no-pager' "$unit" "$tail_count"
+}
+
+parse_debug_clean_args() {
+  DEBUG_CLEAN_MODE="older-than"
+  DEBUG_CLEAN_AGE="$PI_DEBUG_RECORDING_CLEAN_DEFAULT"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all)
+        DEBUG_CLEAN_MODE="all"
+        shift
+        ;;
+      --older-than)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --older-than" >&2
+          exit 1
+        fi
+        validate_duration_token "$2"
+        DEBUG_CLEAN_AGE="$2"
+        DEBUG_CLEAN_MODE="older-than"
+        shift 2
+        ;;
+      *)
+        echo "Unexpected argument: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
 show_help() {
   cat <<'EOF'
 Usage:
+  ./scripts/pi help
   ./scripts/pi status
   ./scripts/pi doctor
-  ./scripts/pi wake-debug
+  ./scripts/pi wake-debug [--since <30m|2h|1d>|--all]
   ./scripts/pi ghost-check
-  ./scripts/pi voice-check
+  ./scripts/pi voice-check [--since <30m|2h|1d>|--all]
   ./scripts/pi lights-check
+  ./scripts/pi light-history <room|studio|light.entity_id> [--hours <N>]
   ./scripts/pi wake-tune
   ./scripts/pi shortcuts-install
   ./scripts/pi bridge-audio <on|off>
   ./scripts/pi single-voice
   ./scripts/pi satellite-channel <auto|0|1>
   ./scripts/pi cmd "<remote command>"
-  ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite>
+  ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite> [--since <30m|2h|1d>|--all]
+  ./scripts/pi debug-clean [--older-than <30m|2h|1d>|--all]
   ./scripts/pi bridge-test "<text>" [--execute]
   ./scripts/pi lights <room|studio|all> <on|off> [--execute]
   ./scripts/pi room <on|off> [--execute]
@@ -72,12 +217,17 @@ Usage:
   ./scripts/pi ssh
 
 Examples:
+  ./scripts/pi help
   ./scripts/pi status
   ./scripts/pi doctor
   ./scripts/pi wake-debug
+  ./scripts/pi wake-debug --all
   ./scripts/pi ghost-check
   ./scripts/pi voice-check
+  ./scripts/pi logs satellite --since 2h
+  ./scripts/pi debug-clean --older-than 24h
   ./scripts/pi lights-check
+  ./scripts/pi light-history studio --hours 24
   ./scripts/pi wake-tune
   ./scripts/pi shortcuts-install
   ./scripts/pi bridge-audio off
@@ -100,11 +250,12 @@ bridge_test() {
   fi
   local dry_run=true
   local text="$1"
+  local source="pi_bridge_test"
   if [[ "${2:-}" == "--execute" ]]; then
     dry_run=false
   fi
   local json_payload
-  json_payload="$(printf '{"text":"%s","dry_run":%s}' "$(printf '%s' "$text" | sed 's/"/\\"/g')" "$dry_run")"
+  json_payload="$(printf '{"text":"%s","dry_run":%s,"source":"%s"}' "$(printf '%s' "$text" | sed 's/"/\\"/g')" "$dry_run" "$source")"
   run_ssh_expect "curl -s -X POST http://127.0.0.1:8000/commands/interpret -H 'Content-Type: application/json' -d '$json_payload'"
 }
 
@@ -128,6 +279,158 @@ lights_phrase() {
   esac
 }
 
+light_history() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: ./scripts/pi light-history <room|studio|light.entity_id> [--hours <N>]" >&2
+    exit 1
+  fi
+
+  local target="$1"
+  shift
+  local hours=24
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --hours)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --hours" >&2
+          exit 1
+        fi
+        if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+          echo "Unsupported --hours value '${2}'. Use an integer like 6, 12, or 24." >&2
+          exit 1
+        fi
+        hours="$2"
+        shift 2
+        ;;
+      *)
+        echo "Unexpected argument: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  run_ssh_expect "cd '${PI_REMOTE_BRIDGE_DIR}' && set -a && . ./.env && set +a && python3 - '$(printf '%s' "$target")' '${hours}' <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
+
+
+def fetch_json(url: str, headers: dict[str, str]):
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return json.load(response)
+
+
+target_arg = sys.argv[1].strip()
+hours = int(sys.argv[2])
+alias_map = {
+    'room': 'light.room',
+    'studio': 'light.studio',
+}
+target_entity = alias_map.get(target_arg, target_arg)
+
+base_url = os.environ['HOME_ASSISTANT_URL'].rstrip('/')
+headers = {
+    'Authorization': f\"Bearer {os.environ['HOME_ASSISTANT_TOKEN']}\",
+    'Content-Type': 'application/json',
+}
+
+states = fetch_json(f\"{base_url}/api/states\", headers)
+states_by_entity_id = {
+    state.get('entity_id'): state
+    for state in states
+    if isinstance(state.get('entity_id'), str)
+}
+
+targets: list[str] = []
+if target_entity:
+    targets.append(target_entity)
+
+target_state = states_by_entity_id.get(target_entity)
+member_entity_ids = []
+if isinstance(target_state, dict):
+    members = target_state.get('attributes', {}).get('entity_id')
+    if isinstance(members, list):
+        member_entity_ids = [
+            member
+            for member in members
+            if isinstance(member, str) and member.startswith('light.')
+        ]
+        targets.extend(member_entity_ids)
+
+seen = set()
+unique_targets = []
+for entity_id in targets:
+    if entity_id in seen:
+        continue
+    seen.add(entity_id)
+    unique_targets.append(entity_id)
+
+now = dt.datetime.now(dt.UTC)
+start = now - dt.timedelta(hours=hours)
+start_text = start.isoformat()
+end_text = now.isoformat()
+
+print('== target ==')
+if isinstance(target_state, dict):
+    print(
+        f\"{target_entity}: state={target_state.get('state')} \"
+        f\"friendly_name={target_state.get('attributes', {}).get('friendly_name')!r}\"
+    )
+else:
+    print(f\"{target_entity}: current state not found in /api/states\")
+
+if member_entity_ids:
+    print(f\"members={member_entity_ids}\")
+
+print()
+print(f'== Home Assistant logbook ({hours}h) ==')
+for entity_id in unique_targets:
+    params = urllib.parse.urlencode(
+        {
+            'entity': entity_id,
+            'end_time': end_text,
+        }
+    )
+    url = f\"{base_url}/api/logbook/{urllib.parse.quote(start_text, safe='')}?{params}\"
+    try:
+        entries = fetch_json(url, headers)
+    except Exception as exc:
+        print(f\"{entity_id}: failed to fetch logbook: {exc}\")
+        print()
+        continue
+
+    if not isinstance(entries, list):
+        print(f\"{entity_id}: unexpected logbook payload\")
+        print()
+        continue
+
+    entries = sorted(entries, key=lambda item: str(item.get('when', '')))
+    recent_entries = entries[-20:]
+
+    print(f\"-- {entity_id} ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'}) --\")
+    if not recent_entries:
+        print('  no logbook entries in this window')
+        print()
+        continue
+
+    for entry in recent_entries:
+        when = entry.get('when', '-')
+        name = entry.get('name', '-')
+        message = entry.get('message', '-')
+        domain = entry.get('domain', '-')
+        context_user_id = entry.get('context_user_id') or '-'
+        print(
+            f\"  {when} | name={name} | message={message} | domain={domain} | user={context_user_id}\"
+        )
+    print()
+PY"
+}
+
 if [[ $# -lt 1 ]]; then
   show_help
   exit 1
@@ -137,6 +440,10 @@ subcommand="$1"
 shift
 
 case "$subcommand" in
+  help|-h|--help)
+    show_help
+    ;;
+
   status)
     run_ssh_expect "hostname && hostname -I && echo && docker ps --format 'table {{.Names}}\t{{.Status}}'"
     printf '\n'
@@ -156,27 +463,31 @@ case "$subcommand" in
     ;;
 
   wake-debug)
+    parse_recent_window_args "$@"
+    recent_window_desc="$(recent_window_description)"
     run_ssh_expect "echo '== containers ==' && docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'"
     printf '\n'
     run_ssh_expect_with_sudo "echo '== wyoming satellite ==' && systemctl status wyoming-satellite.service --no-pager -l && echo && echo '== listening ports ==' && ss -ltn | egrep '10200|10300|10400|10700' || true"
     printf '\n'
-    run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
-    run_ssh_expect_with_sudo "echo '== satellite journal ==' && journalctl -u wyoming-satellite.service -n 120 --no-pager | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|Event\\(type=.error|No speech detected|Transcript not received|stt-no-text-recognized|Waiting for wake word|Connected to server|Connected to wake service|Connected to mic service' || true"
+    run_ssh_expect_with_sudo "echo '== satellite journal (${recent_window_desc}) ==' && $(journalctl_recent_command 'wyoming-satellite.service' 120) | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|Event\\(type=.error|No speech detected|Transcript not received|stt-no-text-recognized|Waiting for wake word|Connected to server|Connected to wake service|Connected to mic service' || true"
     printf '\n'
-    run_ssh_expect "echo '== openwakeword logs ==' && docker logs --tail 80 wyoming-openwakeword 2>&1 || true && echo && echo '== whisper logs ==' && docker logs --tail 80 wyoming-whisper 2>&1 || true && echo && echo '== bridge logs ==' && docker logs --tail 80 ha-command-bridge 2>&1 | egrep -i 'interpret|error|traceback|turn on|turn off|all lights|room|studio' || true"
+    run_ssh_expect "echo '== openwakeword logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-openwakeword' 80) 2>&1 || true && echo && echo '== whisper logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-whisper' 80) 2>&1 || true && echo && echo '== bridge logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'ha-command-bridge' 80) 2>&1 | egrep -i 'interpret|error|traceback|turn on|turn off|all lights|room|studio' || true"
     ;;
 
   ghost-check)
-    run_ssh_expect "echo '== scheduled jobs ==' && curl -s http://127.0.0.1:8000/scheduled-jobs && echo && echo && echo '== routines ==' && curl -s http://127.0.0.1:8000/routines && echo && echo && echo '== saved scenes ==' && curl -s http://127.0.0.1:8000/saved-scenes && echo && echo && echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE)=' .env || true"
+    run_ssh_expect "echo '== pending scheduled jobs ==' && curl -s 'http://127.0.0.1:8000/scheduled-jobs?status=pending' && echo && echo && echo '== enabled routines ==' && curl -s 'http://127.0.0.1:8000/routines?status=enabled' && echo && echo && echo '== recent activity ==' && curl -s 'http://127.0.0.1:8000/activity?limit=20' && echo && echo && echo '== assist guard ==' && if ! curl -fsS 'http://127.0.0.1:8000/assist-guard'; then if [ -f '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json' ]; then cat '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json'; else echo 'assist guard state missing'; fi; fi && echo && echo && echo '== saved scenes ==' && curl -s http://127.0.0.1:8000/saved-scenes && echo && echo && echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES)=' .env || true"
     printf '\n'
     run_ssh_expect "echo '== recent bridge log hints ==' && docker logs --tail 120 ha-command-bridge 2>&1 | egrep -i 'turned on|turned off|scheduled|routine|scene|audio response|error' || true"
     ;;
 
   voice-check)
-    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    parse_recent_window_args "$@"
+    recent_window_desc="$(recent_window_description)"
+    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
-    run_ssh_expect_with_sudo "echo '== recent satellite voice events ==' && journalctl -u wyoming-satellite.service -n 120 --no-pager | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|No speech detected|Transcript not received|stt-no-text-recognized|String should have at most 500|Waiting for wake word' || true"
+    run_ssh_expect_with_sudo "echo '== recent satellite voice events (${recent_window_desc}) ==' && $(journalctl_recent_command 'wyoming-satellite.service' 120) | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|No speech detected|Transcript not received|stt-no-text-recognized|String should have at most 500|Waiting for wake word' || true"
     ;;
 
   lights-check)
@@ -219,11 +530,17 @@ for state in states:
 PY"
     ;;
 
+  light-history)
+    light_history "$@"
+    ;;
+
   wake-tune)
     voice_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env"
     voice_services_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/.env"
+    whisper_beam_size=3
+    whisper_initial_prompt="Home automation voice commands. Transcribe speech literally and briefly. If the audio is unclear, prefer no text instead of guessing. Do not repeat phrases. Common commands: turn on the room lights. turn off the room lights. turn on the studio lights. turn off the studio lights. turn on the studio lights to 50 percent brightness. set the studio lights to 50 percent brightness. change the studio lights to blue. set the studio lights to blue. change the color of the studio lights to blue."
     run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
-      if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=6/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=6\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=8/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=8\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_AUTO_GAIN=' '${voice_env_file}'; then sed -i \"s/^MIC_AUTO_GAIN=.*/MIC_AUTO_GAIN=15/\" '${voice_env_file}'; else printf '\nMIC_AUTO_GAIN=15\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_NOISE_SUPPRESSION=' '${voice_env_file}'; then sed -i \"s/^MIC_NOISE_SUPPRESSION=.*/MIC_NOISE_SUPPRESSION=0/\" '${voice_env_file}'; else printf '\nMIC_NOISE_SUPPRESSION=0\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_VOLUME_MULTIPLIER=' '${voice_env_file}'; then sed -i \"s/^MIC_VOLUME_MULTIPLIER=.*/MIC_VOLUME_MULTIPLIER=4.0/\" '${voice_env_file}'; else printf '\nMIC_VOLUME_MULTIPLIER=4.0\n' >> '${voice_env_file}'; fi; \
@@ -236,7 +553,7 @@ PY"
       if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=6/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=6\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=.*/SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0/\" '${voice_env_file}'; else printf '\nSATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0\n' >> '${voice_env_file}'; fi; \
     else \
       echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
@@ -244,9 +561,11 @@ PY"
     if [ -f '${voice_services_env_file}' ]; then \
       if grep -q '^WAKE_WORD_THRESHOLD=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.17/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.17\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WAKE_WORD_TRIGGER_LEVEL=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_TRIGGER_LEVEL=.*/WAKE_WORD_TRIGGER_LEVEL=1/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_TRIGGER_LEVEL=1\n' >> '${voice_services_env_file}'; fi; \
-      if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=6.0/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=6.0\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=8.0/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=8.0\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WHISPER_BEAM_SIZE=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_BEAM_SIZE=.*/WHISPER_BEAM_SIZE=${whisper_beam_size}/\" '${voice_services_env_file}'; else printf '\nWHISPER_BEAM_SIZE=${whisper_beam_size}\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WHISPER_INITIAL_PROMPT=' '${voice_services_env_file}'; then sed -i \"s|^WHISPER_INITIAL_PROMPT=.*|WHISPER_INITIAL_PROMPT=${whisper_initial_prompt}|\" '${voice_services_env_file}'; else printf '\nWHISPER_INITIAL_PROMPT=${whisper_initial_prompt}\n' >> '${voice_services_env_file}'; fi; \
     fi; \
-    cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && docker compose up -d openwakeword whisper && systemctl restart wyoming-satellite.service && echo '== voice services env ==' && grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS)=' '${voice_services_env_file}' && echo && echo '== satellite env ==' && grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_AUTO_GAIN|MIC_NOISE_SUPPRESSION|MIC_VOLUME_MULTIPLIER|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY)=' '${voice_env_file}' && echo && systemctl status wyoming-satellite.service --no-pager | sed -n '1,25p'"
+    cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && docker compose up -d openwakeword whisper && systemctl restart wyoming-satellite.service && echo '== voice services env ==' && grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT)=' '${voice_services_env_file}' && echo && echo '== satellite env ==' && grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_AUTO_GAIN|MIC_NOISE_SUPPRESSION|MIC_VOLUME_MULTIPLIER|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY)=' '${voice_env_file}' && echo && systemctl status wyoming-satellite.service --no-pager | sed -n '1,25p'"
     ;;
 
   shortcuts-install)
@@ -321,34 +640,47 @@ PY"
     ;;
 
   logs)
-    if [[ $# -ne 1 ]]; then
-      echo "Usage: ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite>" >&2
+    if [[ $# -lt 1 ]]; then
+      echo "Usage: ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite> [--since <30m|2h|1d>|--all]" >&2
       exit 1
     fi
-    case "$1" in
+    log_target="$1"
+    shift
+    parse_recent_window_args "$@"
+    case "$log_target" in
       homeassistant)
-        run_ssh_expect "docker logs --tail 200 homeassistant"
+        run_ssh_expect "$(docker_logs_recent_command 'homeassistant' 200)"
         ;;
       bridge)
-        run_ssh_expect "docker logs --tail 200 ha-command-bridge"
+        run_ssh_expect "$(docker_logs_recent_command 'ha-command-bridge' 200)"
         ;;
       openwakeword)
-        run_ssh_expect "docker logs --tail 200 wyoming-openwakeword"
+        run_ssh_expect "$(docker_logs_recent_command 'wyoming-openwakeword' 200)"
         ;;
       whisper)
-        run_ssh_expect "docker logs --tail 200 wyoming-whisper"
+        run_ssh_expect "$(docker_logs_recent_command 'wyoming-whisper' 200)"
         ;;
       piper)
-        run_ssh_expect "docker logs --tail 200 wyoming-piper"
+        run_ssh_expect "$(docker_logs_recent_command 'wyoming-piper' 200)"
         ;;
       satellite)
-        run_ssh_expect_with_sudo "journalctl -u wyoming-satellite.service -n 200 --no-pager"
+        run_ssh_expect_with_sudo "$(journalctl_recent_command 'wyoming-satellite.service' 200)"
         ;;
       *)
-        echo "Unknown log target: $1" >&2
+        echo "Unknown log target: ${log_target}" >&2
         exit 1
         ;;
     esac
+    ;;
+
+  debug-clean)
+    parse_debug_clean_args "$@"
+    if [[ "${DEBUG_CLEAN_MODE}" == "all" ]]; then
+      run_ssh_expect_with_sudo "mkdir -p '${PI_DEBUG_RECORDING_DIR}' && echo '== removed debug recordings (all) ==' && find '${PI_DEBUG_RECORDING_DIR}' -maxdepth 1 -type f -name '*.wav' -print -delete 2>/dev/null && echo && echo '== remaining debug recordings ==' && find '${PI_DEBUG_RECORDING_DIR}' -maxdepth 1 -type f -name '*.wav' | wc -l && du -sh '${PI_DEBUG_RECORDING_DIR}' 2>/dev/null || true"
+    else
+      debug_clean_minutes="$(duration_to_find_minutes "${DEBUG_CLEAN_AGE}")"
+      run_ssh_expect_with_sudo "mkdir -p '${PI_DEBUG_RECORDING_DIR}' && echo '== removed debug recordings (older than ${DEBUG_CLEAN_AGE}) ==' && find '${PI_DEBUG_RECORDING_DIR}' -maxdepth 1 -type f -name '*.wav' -mmin +${debug_clean_minutes} -print -delete 2>/dev/null && echo && echo '== remaining debug recordings ==' && find '${PI_DEBUG_RECORDING_DIR}' -maxdepth 1 -type f -name '*.wav' | wc -l && du -sh '${PI_DEBUG_RECORDING_DIR}' 2>/dev/null || true"
+    fi
     ;;
 
   bridge-test)
@@ -433,16 +765,16 @@ PY"
   satellite-fast)
     voice_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env"
     run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
-      if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=6/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=6\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=8/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=8\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=' '${voice_env_file}'; then sed -i \"s/^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=.*/MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0/\" '${voice_env_file}'; else printf '\nMIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_VOLUME_MULTIPLIER=' '${voice_env_file}'; then sed -i \"s/^SND_VOLUME_MULTIPLIER=.*/SND_VOLUME_MULTIPLIER=2.5/\" '${voice_env_file}'; else printf '\nSND_VOLUME_MULTIPLIER=2.5\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_CARD=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_CARD=.*/SND_MIXER_CARD=Headphones/\" '${voice_env_file}'; else printf '\nSND_MIXER_CARD=Headphones\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_CONTROL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_CONTROL=.*/SND_MIXER_CONTROL=PCM/\" '${voice_env_file}'; else printf '\nSND_MIXER_CONTROL=PCM\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_LEVEL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_LEVEL=.*/SND_MIXER_LEVEL=100%/\" '${voice_env_file}'; else printf '\nSND_MIXER_LEVEL=100%\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=5/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=5\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=6/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=6\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=6/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=6\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=.*/SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0/\" '${voice_env_file}'; else printf '\nSATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0\n' >> '${voice_env_file}'; fi; \
       systemctl restart wyoming-satellite.service; \
       grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY)=' '${voice_env_file}'; \

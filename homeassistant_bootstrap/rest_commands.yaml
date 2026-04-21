@@ -6,7 +6,20 @@ command_bridge_interpret:
   payload: >-
     {
       "text": {{ command_text | tojson }},
-      "dry_run": {{ dry_run | default(false) | bool | tojson }}
+      "dry_run": {{ dry_run | default(false) | bool | tojson }},
+      "source": {{ source | default('ha_script') | tojson }}
+    }
+
+command_bridge_interpret_assist:
+  url: "http://127.0.0.1:8000/commands/assist"
+  method: post
+  content_type: "application/json"
+  timeout: 60
+  payload: >-
+    {
+      "text": {{ command_text | tojson }},
+      "dry_run": {{ dry_run | default(false) | bool | tojson }},
+      "source": {{ source | default('assist_conversation') | tojson }}
     }
 
 command_bridge_cancel_scheduled_job:
