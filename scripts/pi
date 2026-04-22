@@ -156,6 +156,213 @@ journalctl_recent_command() {
   printf 'journalctl -u %s -n %s --no-pager' "$unit" "$tail_count"
 }
 
+wake_debug_summary() {
+  local recent_window_desc="$1"
+  local journal_cmd
+  local openwakeword_logs_cmd
+  local whisper_logs_cmd
+  local summary_cmd
+
+  journal_cmd="$(journalctl_recent_command 'wyoming-satellite.service' 200)"
+  openwakeword_logs_cmd="$(docker_logs_recent_command 'wyoming-openwakeword' 120)"
+  whisper_logs_cmd="$(docker_logs_recent_command 'wyoming-whisper' 120)"
+
+  summary_cmd="$(cat <<EOF
+tmp_dir=\$(mktemp -d)
+cleanup() { rm -rf "\$tmp_dir"; }
+trap cleanup EXIT
+${journal_cmd} >"\$tmp_dir/satellite.log" 2>&1 || true
+${openwakeword_logs_cmd} >"\$tmp_dir/openwakeword.log" 2>&1 || true
+${whisper_logs_cmd} >"\$tmp_dir/whisper.log" 2>&1 || true
+curl -fsS 'http://127.0.0.1:8000/activity?limit=40' >"\$tmp_dir/activity.json" 2>/dev/null || printf '%s\n' '{"count":0,"entries":[]}' >"\$tmp_dir/activity.json"
+curl -fsS 'http://127.0.0.1:8000/assist-guard' >"\$tmp_dir/assist_guard.json" 2>/dev/null || printf '%s\n' '{"enabled":false,"state":{}}' >"\$tmp_dir/assist_guard.json"
+python3 - "\$tmp_dir" "${recent_window_desc}" <<'PY'
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import re
+import sys
+import time
+
+root = Path(sys.argv[1])
+recent_window_desc = sys.argv[2]
+
+
+def read_text(name: str) -> str:
+    path = root / name
+    try:
+        return path.read_text("utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+
+
+def read_json(name: str, fallback: dict) -> dict:
+    path = root / name
+    try:
+        payload = json.loads(path.read_text("utf-8", errors="replace"))
+    except Exception:
+        return dict(fallback)
+    return payload if isinstance(payload, dict) else dict(fallback)
+
+
+def count(pattern: str, text: str, *, flags: int = 0) -> int:
+    return len(re.findall(pattern, text, flags))
+
+
+def truncate(value: str, limit: int = 80) -> str:
+    compact = " ".join(str(value).split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3] + "..."
+
+
+def age_seconds(timestamp_ms: object, *, now_ms: int) -> str:
+    try:
+        timestamp_ms = int(timestamp_ms)
+    except (TypeError, ValueError):
+        return "none"
+    if timestamp_ms <= 0:
+        return "none"
+    age_ms = max(0, now_ms - timestamp_ms)
+    return f"{age_ms / 1000:.1f}"
+
+
+satellite_log = read_text("satellite.log")
+openwakeword_log = read_text("openwakeword.log")
+whisper_log = read_text("whisper.log")
+combined_logs = "\n".join([satellite_log, openwakeword_log, whisper_log])
+
+activity_payload = read_json("activity.json", {"count": 0, "entries": []})
+assist_guard_payload = read_json("assist_guard.json", {"enabled": False, "state": {}})
+
+activity_entries = activity_payload.get("entries")
+if not isinstance(activity_entries, list):
+    activity_entries = []
+
+assist_entries = [
+    entry
+    for entry in activity_entries
+    if isinstance(entry, dict) and str(entry.get("source", "")).startswith("assist_")
+]
+assist_failed_entries = [entry for entry in assist_entries if entry.get("status") == "failed"]
+guard_failures = [
+    entry
+    for entry in assist_failed_entries
+    if isinstance(entry.get("details"), dict) and entry["details"].get("guard") == "assist_recent_wake"
+]
+last_assist_entry = assist_entries[0] if assist_entries else None
+last_assist_error = None
+if assist_failed_entries:
+    details = assist_failed_entries[0].get("details")
+    if isinstance(details, dict):
+        last_assist_error = details.get("error")
+
+assist_guard_state = assist_guard_payload.get("state")
+if not isinstance(assist_guard_state, dict):
+    assist_guard_state = {}
+
+now_ms = int(time.time() * 1000)
+detections = count(r"Detection\(", satellite_log)
+transcripts = count(r"Event\(type=.transcript", satellite_log)
+syntheses = count(r"Event\(type=.synthesize", satellite_log)
+satellite_errors = count(r"Event\(type=.error", satellite_log)
+no_speech_restarts = count(r"No speech detected", satellite_log)
+transcript_timeouts = count(r"Transcript not received", satellite_log)
+stt_no_text = count(r"stt-no-text-recognized", combined_logs)
+bridge_assist_entries = len(assist_entries)
+bridge_assist_executed = sum(1 for entry in assist_entries if entry.get("status") == "executed")
+bridge_assist_failed = len(assist_failed_entries)
+assist_guard_failures = len(guard_failures)
+
+print(f"== wake-debug summary ({recent_window_desc}) ==")
+print(
+    "wake_counts:"
+    f" detections={detections}"
+    f" transcripts={transcripts}"
+    f" synthesize={syntheses}"
+    f" satellite_errors={satellite_errors}"
+)
+print(
+    "recovery_counts:"
+    f" no_speech_restarts={no_speech_restarts}"
+    f" transcript_timeouts={transcript_timeouts}"
+    f" stt_no_text={stt_no_text}"
+)
+print(
+    "bridge_counts:"
+    f" assist_entries={bridge_assist_entries}"
+    f" assist_executed={bridge_assist_executed}"
+    f" assist_failed={bridge_assist_failed}"
+    f" assist_guard_failures={assist_guard_failures}"
+)
+print(
+    "assist_guard:"
+    f" enabled={bool(assist_guard_payload.get('enabled'))}"
+    f" last_detection_age_s={age_seconds(assist_guard_state.get('last_detection_ms'), now_ms=now_ms)}"
+    f" last_consumed_age_s={age_seconds(assist_guard_state.get('last_consumed_detection_ms'), now_ms=now_ms)}"
+)
+
+if last_assist_entry is not None:
+    print(
+        "last_assist:"
+        f" status={last_assist_entry.get('status', 'unknown')}"
+        f" source={last_assist_entry.get('source', 'unknown')}"
+        f" text={truncate(last_assist_entry.get('text', ''))!r}"
+    )
+if last_assist_error:
+    print(f"last_assist_error: {truncate(last_assist_error, limit=140)}")
+
+print()
+print("Likely breakpoint:")
+if detections == 0:
+    print(
+        "- No wake detections were observed in the selected window. "
+        "If the failed attempt is inside this window, focus on openWakeWord sensitivity or the mic path."
+    )
+elif transcripts == 0:
+    if no_speech_restarts > 0:
+        print(
+            "- Wake was detected, but the satellite restarted for no-speech before any transcript arrived. "
+            "This points to the wake-to-stream handoff or the command start being missed."
+        )
+    elif stt_no_text > 0:
+        print(
+            "- Wake appears to have reached STT, but Whisper returned no usable text."
+        )
+    else:
+        print(
+            "- Wake was detected, but no transcript reached the bridge. "
+            "Check the satellite and Whisper handoff."
+        )
+elif bridge_assist_entries == 0:
+    print(
+        "- Transcripts were observed, but no recent Assist activity reached the bridge. "
+        "Check the Home Assistant Assist pipeline routing."
+    )
+elif bridge_assist_executed > 0:
+    print(
+        "- The selected window includes at least one successful end-to-end Assist execution."
+    )
+elif assist_guard_failures > 0:
+    print(
+        "- Assist reached the bridge, but the recent command was rejected by the recent-wake guard."
+    )
+elif bridge_assist_failed > 0:
+    print(
+        "- Assist reached the bridge, but the recent command failed before execution."
+    )
+else:
+    print(
+        "- The raw logs do not point to one obvious breakpoint yet. Check the detailed sections below."
+    )
+PY
+EOF
+)"
+
+  run_ssh_expect_with_sudo "$summary_cmd"
+}
+
 parse_debug_clean_args() {
   DEBUG_CLEAN_MODE="older-than"
   DEBUG_CLEAN_AGE="$PI_DEBUG_RECORDING_CLEAN_DEFAULT"
@@ -472,9 +679,11 @@ case "$subcommand" in
     printf '\n'
     run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
+    wake_debug_summary "${recent_window_desc}"
+    printf '\n'
     run_ssh_expect_with_sudo "echo '== satellite journal (${recent_window_desc}) ==' && $(journalctl_recent_command 'wyoming-satellite.service' 120) | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|Event\\(type=.error|No speech detected|Transcript not received|stt-no-text-recognized|Waiting for wake word|Connected to server|Connected to wake service|Connected to mic service' || true"
     printf '\n'
-    run_ssh_expect "echo '== openwakeword logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-openwakeword' 80) 2>&1 || true && echo && echo '== whisper logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-whisper' 80) 2>&1 || true && echo && echo '== bridge logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'ha-command-bridge' 80) 2>&1 | egrep -i 'interpret|error|traceback|turn on|turn off|all lights|room|studio' || true"
+    run_ssh_expect "echo '== openwakeword logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-openwakeword' 80) 2>&1 || true && echo && echo '== whisper logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-whisper' 80) 2>&1 || true && echo && echo '== bridge logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'ha-command-bridge' 80) 2>&1 | egrep -i 'assist|interpret|input text|executed:|fast path|local interpreter|error|traceback|turn on|turn off|all lights|room|studio|monitor' || true"
     ;;
 
   ghost-check)
@@ -560,7 +769,7 @@ PY"
       echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
     fi; \
     if [ -f '${voice_services_env_file}' ]; then \
-      if grep -q '^WAKE_WORD_THRESHOLD=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.17/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.17\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WAKE_WORD_THRESHOLD=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.15/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.15\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WAKE_WORD_TRIGGER_LEVEL=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_TRIGGER_LEVEL=.*/WAKE_WORD_TRIGGER_LEVEL=1/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_TRIGGER_LEVEL=1\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=8.0/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=8.0\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WHISPER_BEAM_SIZE=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_BEAM_SIZE=.*/WHISPER_BEAM_SIZE=${whisper_beam_size}/\" '${voice_services_env_file}'; else printf '\nWHISPER_BEAM_SIZE=${whisper_beam_size}\n' >> '${voice_services_env_file}'; fi; \

@@ -13,13 +13,15 @@ set remote "lucas@$host"
 
 proc run_with_password {password command_args} {
   spawn {*}$command_args
-  expect {
-    -re "(?i)password:" {
-      send "$password\r"
-      exp_continue
-    }
-    eof {}
+expect {
+  -re "(?i)password:" {
+    log_user 0
+    send -- "$password\r"
+    log_user 1
+    exp_continue
   }
+  eof {}
+}
 
   catch wait result
   set exit_status [lindex $result 3]

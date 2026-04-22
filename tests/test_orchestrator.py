@@ -1290,6 +1290,58 @@ class LocalInterpreterTests(unittest.TestCase):
         self.assertEqual(intent.primary_intent.action, "run_script")
         self.assertEqual(intent.primary_intent.target, "script.monitor_wake")
 
+    def test_matches_mac_open_youtube_script(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_youtube"],
+                "target_capabilities": {
+                    "script.mac_open_youtube": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open youtube on the mac", "launch youtube on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("open youtube on the mac", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
+
+    def test_matches_mac_open_spotify_script(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_spotify"],
+                "target_capabilities": {
+                    "script.mac_open_spotify": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open spotify on the mac", "launch spotify on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("launch spotify on the mac", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_spotify")
+
     def test_rejects_unknown_phrase(self):
         interpreter = LocalInterpreter(FakeSettings())
         context = type(

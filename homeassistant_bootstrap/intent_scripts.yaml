@@ -128,6 +128,58 @@ BridgeMonitorWake:
         dry_run: false
         source: "assist_fast_intent:monitor_wake"
 
+BridgeMacOpenYouTube:
+  description: Fast local Mac request routed through the bridge to open YouTube.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "open youtube on the mac"
+        dry_run: false
+        source: "assist_fast_intent:mac_open_youtube"
+
+BridgeMacOpenSpotify:
+  description: Fast local Mac request routed through the bridge to open Spotify.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "open spotify on the mac"
+        dry_run: false
+        source: "assist_fast_intent:mac_open_spotify"
+
+BridgeMacOpenChatGPT:
+  description: Fast local Mac request routed through the bridge to open ChatGPT.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "open chatgpt on the mac"
+        dry_run: false
+        source: "assist_fast_intent:mac_open_chatgpt"
+
+BridgeMacOpenSafari:
+  description: Fast local Mac request routed through the bridge to open Safari.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "open safari on the mac"
+        dry_run: false
+        source: "assist_fast_intent:mac_open_safari"
+
 BridgeGoodNight:
   description: Fast local bedtime routine for voice requests such as good night.
   async_action: true

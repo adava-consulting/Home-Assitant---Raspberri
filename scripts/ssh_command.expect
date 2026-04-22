@@ -15,7 +15,9 @@ set remote "lucas@$host"
 spawn ssh -o StrictHostKeyChecking=accept-new $remote $command
 expect {
   -re "(?i)password:" {
-    send "$password\r"
+    log_user 0
+    send -- "$password\r"
+    log_user 1
     exp_continue
   }
   eof {}

@@ -118,7 +118,7 @@ is too weak.
 
 Current repo defaults that matter most for reliability:
 
-- `WAKE_WORD_THRESHOLD=0.17`
+- `WAKE_WORD_THRESHOLD=0.15`
 - `WHISPER_BEAM_SIZE=3`
 - `WHISPER_INITIAL_PROMPT` now explicitly prefers no text over guessing and keeps only a short list of common room/studio commands
 - `WAKE_WORD_REFRACTORY_SECONDS=8.0`
@@ -261,7 +261,7 @@ Recommended first-pass values:
 - `MIC_VOLUME_MULTIPLIER=4.0`
 - `SND_VOLUME_MULTIPLIER=2.5`
 - `MIC_CHANNEL_INDEX=` (leave blank so the satellite auto-selects the best channel)
-- `WAKE_WORD_THRESHOLD=0.17`
+- `WAKE_WORD_THRESHOLD=0.15`
 - `WHISPER_BEAM_SIZE=3`
 - `WAKE_WORD_TRIGGER_LEVEL=1`
 - `WAKE_WORD_REFRACTORY_SECONDS=8.0`

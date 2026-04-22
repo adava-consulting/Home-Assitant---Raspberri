@@ -787,6 +787,30 @@ This is intentionally a standby/sleep feature, not a hard power toggle. On some
 monitors the wake path depends on which Raspberry method is supported by the
 running OS image.
 
+## Mac Control
+
+The bridge can also route a small allowlist of Mac actions over SSH without
+giving the voice path arbitrary shell access.
+
+First-pass voice phrases mapped locally:
+
+- `open youtube on the mac`
+- `open spotify on the mac`
+- `open chatgpt on the mac`
+- `open safari on the mac`
+
+Implementation notes:
+
+- the bridge maps these phrases to dedicated `script.mac_*` targets
+- those script targets are intercepted locally inside the bridge
+- the bridge SSHes directly from the Raspberry-hosted container to the Mac
+- the remote Mac helper lives at `~/ha-command-bridge/mac_tools/mac_control.sh`
+- `./scripts/install_mac_control_local.sh` installs that helper locally and adds
+  the Raspberry Pi public key to `~/.ssh/authorized_keys`
+
+This path is intentionally limited to a few safe open-app/open-URL actions until
+the SSH setup proves reliable in daily use.
+
 ## Assist Safety
 
 The bridge now keeps a small amount of voice-safety state so we can correlate:

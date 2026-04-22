@@ -55,8 +55,8 @@ Default language/voice settings are:
   levels on the ReSpeaker were causing full commands to be discarded as silence
 - Piper voice: `en_US-lessac-medium`
 - Wake word: `hey_jarvis`
-- openWakeWord threshold: `0.17` to favor first-try activations on this ReSpeaker setup,
-  especially after long idle periods where the first wake was sometimes missed
+- openWakeWord threshold: `0.15` to favor first-try activations on this ReSpeaker setup,
+  especially after long idle periods where the first wake was sometimes missed at `0.17`
 - openWakeWord trigger level: `1`
 - openWakeWord refractory: `8.0` seconds
 - Wake refractory: `8` seconds on the satellite side

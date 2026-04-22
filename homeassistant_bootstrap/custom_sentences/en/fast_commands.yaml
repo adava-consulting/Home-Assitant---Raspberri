@@ -74,6 +74,30 @@ intents:
           - "turn on [the] monitor"
           - "wake [the] display"
           - "turn on [the] display"
+  BridgeMacOpenYouTube:
+    data:
+      - sentences:
+          - "open youtube on [the] mac"
+          - "launch youtube on [the] mac"
+          - "open youtube on my mac"
+  BridgeMacOpenSpotify:
+    data:
+      - sentences:
+          - "open spotify on [the] mac"
+          - "launch spotify on [the] mac"
+          - "open spotify on my mac"
+  BridgeMacOpenChatGPT:
+    data:
+      - sentences:
+          - "open chatgpt on [the] mac"
+          - "launch chatgpt on [the] mac"
+          - "open chatgpt on my mac"
+  BridgeMacOpenSafari:
+    data:
+      - sentences:
+          - "open safari on [the] mac"
+          - "launch safari on [the] mac"
+          - "open safari on my mac"
   BridgeGoodNight:
     data:
       - sentences:

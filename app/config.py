@@ -145,6 +145,22 @@ class Settings(BaseSettings):
         12.0,
         alias="MONITOR_CONTROL_TIMEOUT_SECONDS",
     )
+    mac_control_enabled: bool = Field(False, alias="MAC_CONTROL_ENABLED")
+    mac_control_ssh_host: str = Field("", alias="MAC_CONTROL_SSH_HOST")
+    mac_control_ssh_user: str = Field("", alias="MAC_CONTROL_SSH_USER")
+    mac_control_ssh_port: int = Field(22, alias="MAC_CONTROL_SSH_PORT")
+    mac_control_ssh_key_path: str = Field(
+        "/home/claude-host-home/.ssh/ha-bridge-mac-action",
+        alias="MAC_CONTROL_SSH_KEY_PATH",
+    )
+    mac_control_remote_script_path: str = Field(
+        "",
+        alias="MAC_CONTROL_REMOTE_SCRIPT_PATH",
+    )
+    mac_control_timeout_seconds: float = Field(
+        12.0,
+        alias="MAC_CONTROL_TIMEOUT_SECONDS",
+    )
     kokoro_model_path: str = Field("", alias="KOKORO_MODEL_PATH")
     kokoro_voices_path: str = Field("", alias="KOKORO_VOICES_PATH")
     kokoro_voice: str = Field("af_heart", alias="KOKORO_VOICE")

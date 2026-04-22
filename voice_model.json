@@ -12,7 +12,11 @@
     "script.prepare_bedtime",
     "script.welcome_guests",
     "script.monitor_sleep",
-    "script.monitor_wake"
+    "script.monitor_wake",
+    "script.mac_open_youtube",
+    "script.mac_open_spotify",
+    "script.mac_open_chatgpt",
+    "script.mac_open_safari"
   ],
   "ignored_entities": [
     "light.office",
@@ -116,6 +120,38 @@
         "wake the display",
         "turn on the display",
         "monitor on"
+      ]
+    },
+    "script.mac_open_youtube": {
+      "aliases": [
+        "open youtube on the mac",
+        "open youtube on mac",
+        "open youtube on my mac",
+        "launch youtube on the mac"
+      ]
+    },
+    "script.mac_open_spotify": {
+      "aliases": [
+        "open spotify on the mac",
+        "open spotify on mac",
+        "open spotify on my mac",
+        "launch spotify on the mac"
+      ]
+    },
+    "script.mac_open_chatgpt": {
+      "aliases": [
+        "open chatgpt on the mac",
+        "open chatgpt on mac",
+        "open chatgpt on my mac",
+        "launch chatgpt on the mac"
+      ]
+    },
+    "script.mac_open_safari": {
+      "aliases": [
+        "open safari on the mac",
+        "open safari on mac",
+        "open safari on my mac",
+        "launch safari on the mac"
       ]
     }
   }
