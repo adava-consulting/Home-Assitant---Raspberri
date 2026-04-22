@@ -59,6 +59,21 @@ intents:
           - "change [the] studio lights to blue"
           - "change [the] color of [the] studio lights to blue"
           - "make [the] studio lights blue"
+  BridgeMonitorSleep:
+    data:
+      - sentences:
+          - "sleep [the] monitor"
+          - "put [the] monitor to sleep"
+          - "turn off [the] monitor"
+          - "sleep [the] display"
+          - "turn off [the] display"
+  BridgeMonitorWake:
+    data:
+      - sentences:
+          - "wake [the] monitor"
+          - "turn on [the] monitor"
+          - "wake [the] display"
+          - "turn on [the] display"
   BridgeGoodNight:
     data:
       - sentences:

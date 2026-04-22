@@ -10,7 +10,9 @@
   ],
   "allowed_scripts": [
     "script.prepare_bedtime",
-    "script.welcome_guests"
+    "script.welcome_guests",
+    "script.monitor_sleep",
+    "script.monitor_wake"
   ],
   "ignored_entities": [
     "light.office",
@@ -95,6 +97,25 @@
         "welcome guests",
         "guest lights",
         "prepare for guests"
+      ]
+    },
+    "script.monitor_sleep": {
+      "aliases": [
+        "sleep the monitor",
+        "put the monitor to sleep",
+        "turn off the monitor",
+        "sleep the display",
+        "turn off the display",
+        "monitor off"
+      ]
+    },
+    "script.monitor_wake": {
+      "aliases": [
+        "wake the monitor",
+        "turn on the monitor",
+        "wake the display",
+        "turn on the display",
+        "monitor on"
       ]
     }
   }

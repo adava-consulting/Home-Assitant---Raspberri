@@ -8,7 +8,7 @@ ENV HOME=/home/appuser
 ENV HF_HOME=/home/claude-host-home/ha-command-bridge-data/huggingface
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm espeak-ng alsa-utils mpg123 \
+    && apt-get install -y --no-install-recommends nodejs npm espeak-ng alsa-utils mpg123 openssh-client \
     && npm install -g @anthropic-ai/claude-code \
     && groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 --create-home appuser \

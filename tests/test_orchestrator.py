@@ -1238,6 +1238,58 @@ class LocalInterpreterTests(unittest.TestCase):
         self.assertEqual(intent.primary_intent.action, "run_script")
         self.assertEqual(intent.primary_intent.target, "script.welcome_guests")
 
+    def test_matches_monitor_sleep_script(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.monitor_sleep"],
+                "target_capabilities": {
+                    "script.monitor_sleep": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["sleep the monitor", "turn off the monitor"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("turn off the monitor", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.monitor_sleep")
+
+    def test_matches_monitor_wake_script(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.monitor_wake"],
+                "target_capabilities": {
+                    "script.monitor_wake": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["wake the monitor", "turn on the monitor"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("wake the monitor", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.monitor_wake")
+
     def test_rejects_unknown_phrase(self):
         interpreter = LocalInterpreter(FakeSettings())
         context = type(

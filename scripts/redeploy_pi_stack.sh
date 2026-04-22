@@ -38,7 +38,7 @@ expect "${PROJECT_DIR}/scripts/sync_ha_bootstrap.expect" \
 expect "${PROJECT_DIR}/scripts/ssh_command.expect" \
   "$PASSWORD" \
   "$HOST" \
-  "printf '%s\n' '${ESCAPED_PASSWORD}' | sudo -S bash -lc 'if [ -f \"${VOICE_ENV_FILE}\" ]; then \
+  "printf '%s\n' '${ESCAPED_PASSWORD}' | sudo -S -p '' bash -lc 'if [ -f \"${VOICE_ENV_FILE}\" ]; then \
      if grep -q \"^WAKE_REFRACTORY_SECONDS=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=8/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nWAKE_REFRACTORY_SECONDS=8\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \
      if grep -q \"^MIC_AUTO_GAIN=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^MIC_AUTO_GAIN=.*/MIC_AUTO_GAIN=15/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nMIC_AUTO_GAIN=15\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \
      if grep -q \"^MIC_NOISE_SUPPRESSION=\" \"${VOICE_ENV_FILE}\"; then sed -i \"s/^MIC_NOISE_SUPPRESSION=.*/MIC_NOISE_SUPPRESSION=0/\" \"${VOICE_ENV_FILE}\"; else printf \"\\nMIC_NOISE_SUPPRESSION=0\\n\" >> \"${VOICE_ENV_FILE}\"; fi; \

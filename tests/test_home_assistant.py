@@ -51,6 +51,22 @@ class FakeAudioOutput:
         }
 
 
+class FakeLocalScriptService:
+    def __init__(self):
+        self.executed_intents: list[Intent] = []
+
+    def can_handle(self, intent: Intent) -> bool:
+        return intent.target in {"script.monitor_sleep", "script.monitor_wake"}
+
+    async def execute_intent(self, intent: Intent) -> dict:
+        self.executed_intents.append(intent)
+        return {
+            "service": "host.monitor_control",
+            "target": {"entity_id": intent.target},
+            "response": {"ok": True},
+        }
+
+
 class FakeCounter:
     def __init__(self, count_name: str, value: int):
         setattr(self, count_name, value)
@@ -292,6 +308,26 @@ class ClientCachingTests(unittest.IsolatedAsyncioTestCase):
                 "http://homeassistant.local:8123/api/states/light.room",
             ],
         )
+
+    async def test_execute_intent_uses_local_script_service_for_monitor_targets(self):
+        fake_client = FakeAsyncClient(
+            states_payload=[],
+            state_payload_by_id={},
+        )
+        local_script_service = FakeLocalScriptService()
+        client = CachedHomeAssistantClient(FakeCachedSettings(), fake_client)
+        client._local_script_service = local_script_service
+
+        result = await client.execute_intent(
+            Intent(action="run_script", target="script.monitor_sleep", parameters={})
+        )
+
+        self.assertEqual(result["service"], "host.monitor_control")
+        self.assertEqual(
+            [intent.target for intent in local_script_service.executed_intents],
+            ["script.monitor_sleep"],
+        )
+        self.assertEqual(fake_client.post_calls, [])
 
 
 class HealthSnapshotTests(unittest.IsolatedAsyncioTestCase):

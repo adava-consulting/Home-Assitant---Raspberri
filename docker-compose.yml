@@ -11,5 +11,7 @@ services:
       - /dev/snd:/dev/snd
     group_add:
       - "29"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /home/lucas:/home/claude-host-home

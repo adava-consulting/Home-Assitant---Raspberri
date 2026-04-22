@@ -43,7 +43,7 @@ run_ssh_expect_with_sudo() {
   local escaped_password
   escaped_password="$(escape_single_quotes "${PI_PASSWORD}")"
   local command="$1"
-  run_ssh_expect "printf '%s\n' '${escaped_password}' | sudo -S bash -lc '$(escape_single_quotes "$command")'"
+  run_ssh_expect "printf '%s\n' '${escaped_password}' | sudo -S -p '' bash -lc '$(escape_single_quotes "$command")'"
 }
 
 validate_duration_token() {
@@ -195,6 +195,7 @@ Usage:
   ./scripts/pi voice-check [--since <30m|2h|1d>|--all]
   ./scripts/pi lights-check
   ./scripts/pi light-history <room|studio|light.entity_id> [--hours <N>]
+  ./scripts/pi monitor <on|off|status>
   ./scripts/pi wake-tune
   ./scripts/pi shortcuts-install
   ./scripts/pi bridge-audio <on|off>
@@ -469,7 +470,7 @@ case "$subcommand" in
     printf '\n'
     run_ssh_expect_with_sudo "echo '== wyoming satellite ==' && systemctl status wyoming-satellite.service --no-pager -l && echo && echo '== listening ports ==' && ss -ltn | egrep '10200|10300|10400|10700' || true"
     printf '\n'
-    run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
     run_ssh_expect_with_sudo "echo '== satellite journal (${recent_window_desc}) ==' && $(journalctl_recent_command 'wyoming-satellite.service' 120) | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|Event\\(type=.error|No speech detected|Transcript not received|stt-no-text-recognized|Waiting for wake word|Connected to server|Connected to wake service|Connected to mic service' || true"
     printf '\n'
@@ -477,7 +478,7 @@ case "$subcommand" in
     ;;
 
   ghost-check)
-    run_ssh_expect "echo '== pending scheduled jobs ==' && curl -s 'http://127.0.0.1:8000/scheduled-jobs?status=pending' && echo && echo && echo '== enabled routines ==' && curl -s 'http://127.0.0.1:8000/routines?status=enabled' && echo && echo && echo '== recent activity ==' && curl -s 'http://127.0.0.1:8000/activity?limit=20' && echo && echo && echo '== assist guard ==' && if ! curl -fsS 'http://127.0.0.1:8000/assist-guard'; then if [ -f '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json' ]; then cat '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json'; else echo 'assist guard state missing'; fi; fi && echo && echo && echo '== saved scenes ==' && curl -s http://127.0.0.1:8000/saved-scenes && echo && echo && echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES)=' .env || true"
+    run_ssh_expect "echo '== pending scheduled jobs ==' && curl -s 'http://127.0.0.1:8000/scheduled-jobs?status=pending' && echo && echo && echo '== enabled routines ==' && curl -s 'http://127.0.0.1:8000/routines?status=enabled' && echo && echo && echo '== recent activity ==' && curl -s 'http://127.0.0.1:8000/activity?limit=20' && echo && echo && echo '== assist guard ==' && if ! curl -fsS 'http://127.0.0.1:8000/assist-guard'; then if [ -f '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json' ]; then cat '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json'; else echo 'assist guard state missing'; fi; fi && echo && echo && echo '== saved scenes ==' && curl -s http://127.0.0.1:8000/saved-scenes && echo && echo && echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true"
     printf '\n'
     run_ssh_expect "echo '== recent bridge log hints ==' && docker logs --tail 120 ha-command-bridge 2>&1 | egrep -i 'turned on|turned off|scheduled|routine|scene|audio response|error' || true"
     ;;
@@ -485,7 +486,7 @@ case "$subcommand" in
   voice-check)
     parse_recent_window_args "$@"
     recent_window_desc="$(recent_window_description)"
-    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
     run_ssh_expect_with_sudo "echo '== recent satellite voice events (${recent_window_desc}) ==' && $(journalctl_recent_command 'wyoming-satellite.service' 120) | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|No speech detected|Transcript not received|stt-no-text-recognized|String should have at most 500|Waiting for wake word' || true"
     ;;
@@ -685,6 +686,24 @@ PY"
 
   bridge-test)
     bridge_test "$@"
+    ;;
+
+  monitor)
+    if [[ $# -lt 1 ]]; then
+      echo "Usage: ./scripts/pi monitor <on|off|status>" >&2
+      exit 1
+    fi
+    monitor_action="$1"
+    monitor_helper="${PI_REMOTE_BRIDGE_DIR}/raspberry_tools/monitor_power.sh"
+    case "$monitor_action" in
+      on|off|status)
+        run_ssh_expect_with_sudo "'${monitor_helper}' '${monitor_action}'"
+        ;;
+      *)
+        echo "Usage: ./scripts/pi monitor <on|off|status>" >&2
+        exit 1
+        ;;
+    esac
     ;;
 
   lights)

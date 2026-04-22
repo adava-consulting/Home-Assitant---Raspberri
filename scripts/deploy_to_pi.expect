@@ -13,6 +13,11 @@ set remote_dir [lindex $argv 2]
 set project_dir [lindex $argv 3]
 set remote "lucas@$host"
 
+proc shell_quote {value} {
+  set escaped [string map {' {'"'"'}} $value]
+  return "'$escaped'"
+}
+
 proc run_with_password {password command_args} {
   spawn {*}$command_args
   expect {
@@ -35,6 +40,7 @@ run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remot
 set rsync_args [list rsync -av --exclude __pycache__ --exclude .venv]
 lappend rsync_args \
   "$project_dir/app" \
+  "$project_dir/raspberry_tools" \
   "$project_dir/CLAUDE.md" \
   "$project_dir/Dockerfile" \
   "$project_dir/docker-compose.yml" \
@@ -46,3 +52,12 @@ run_with_password $password $rsync_args
 
 set deploy_cmd "cd $remote_dir && docker compose up --build -d && docker compose ps"
 run_with_password $password [list ssh $remote $deploy_cmd]
+
+set monitor_script "$remote_dir/raspberry_tools/monitor_power.sh"
+set monitor_install_script "$remote_dir/raspberry_tools/install_monitor_control.sh"
+set monitor_install_cmd [format {chmod +x %s %s && printf '%%s\n' %s | sudo -S -p '' bash -lc %s} \
+  [shell_quote $monitor_script] \
+  [shell_quote $monitor_install_script] \
+  [shell_quote $password] \
+  [shell_quote $monitor_install_script]]
+run_with_password $password [list ssh $remote $monitor_install_cmd]

@@ -707,9 +707,9 @@ The bootstrap now includes:
 - `homeassistant_bootstrap/automations.yaml`
   - forwards Assist commands to the bridge for local-first interpretation
 - `homeassistant_bootstrap/intent_scripts.yaml`
-  - provides fast bridge-routed intents for `good night`, `guest mode`, `all lights`, `room`, and `studio`
+  - provides fast bridge-routed intents for `good night`, `guest mode`, `all lights`, `room`, `studio`, and monitor sleep/wake
 - `homeassistant_bootstrap/custom_sentences/en/fast_commands.yaml`
-  - adds explicit English sentence coverage for room, studio, all-lights, and routine phrases
+  - adds explicit English sentence coverage for room, studio, all-lights, routine phrases, and monitor sleep/wake phrases
 
 This gives a faster and more predictable voice path for common household commands because the phrases are normalized early and the bridge can stay on its local fast path.
 
@@ -749,6 +749,12 @@ Recommended commands:
   - full stable redeploy: bridge, voice services, bootstrap, and tuned satellite values
 - `./scripts/pi lights-check`
   - shows whether `light.room` and `light.studio` really exist on the live Home Assistant instance
+- `./scripts/pi monitor status`
+  - checks which Raspberry-side standby methods are available for the HDMI monitor
+- `./scripts/pi monitor off`
+  - blanks or sleeps the HDMI monitor directly from the Pi host
+- `./scripts/pi monitor on`
+  - wakes or unblanks the HDMI monitor directly from the Pi host
 - `./scripts/pi voice-check`
   - shows current wake-word, Whisper, Assist guard, and satellite timing values
 - `./scripts/pi wake-debug`
@@ -757,6 +763,29 @@ Recommended commands:
   - shows pending jobs, recent bridge activity, saved scenes, and Assist guard state
 - `./scripts/pi shortcuts-install`
   - installs local shell shortcuts like `hapi status` and `hapi room off --execute`
+
+## Monitor Standby
+
+The bridge can now handle voice-driven monitor standby through Raspberry-host
+helpers without routing the action through Home Assistant services.
+
+Voice phrases mapped locally:
+
+- `sleep the monitor`
+- `turn off the monitor`
+- `wake the monitor`
+- `turn on the monitor`
+
+Implementation notes:
+
+- the bridge maps these phrases to `script.monitor_sleep` and `script.monitor_wake`
+- those script targets are intercepted locally inside the bridge
+- the bridge then uses SSH to call `raspberry_tools/monitor_power.sh` on the Pi host
+- the host helper tries `vcgencmd`, `tvservice`, framebuffer blanking, and `setterm`
+
+This is intentionally a standby/sleep feature, not a hard power toggle. On some
+monitors the wake path depends on which Raspberry method is supported by the
+running OS image.
 
 ## Assist Safety
 

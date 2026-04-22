@@ -129,6 +129,22 @@ class Settings(BaseSettings):
         "/home/claude-host-home/ha-command-bridge-data/assist_guard_state.json",
         alias="ASSIST_GUARD_STATE_FILE",
     )
+    monitor_control_enabled: bool = Field(True, alias="MONITOR_CONTROL_ENABLED")
+    monitor_control_ssh_host: str = Field("host.docker.internal", alias="MONITOR_CONTROL_SSH_HOST")
+    monitor_control_ssh_user: str = Field("lucas", alias="MONITOR_CONTROL_SSH_USER")
+    monitor_control_ssh_port: int = Field(22, alias="MONITOR_CONTROL_SSH_PORT")
+    monitor_control_ssh_key_path: str = Field(
+        "/home/claude-host-home/.ssh/ha-bridge-host-action",
+        alias="MONITOR_CONTROL_SSH_KEY_PATH",
+    )
+    monitor_control_remote_script_path: str = Field(
+        "/home/lucas/ha-command-bridge/raspberry_tools/monitor_power.sh",
+        alias="MONITOR_CONTROL_REMOTE_SCRIPT_PATH",
+    )
+    monitor_control_timeout_seconds: float = Field(
+        12.0,
+        alias="MONITOR_CONTROL_TIMEOUT_SECONDS",
+    )
     kokoro_model_path: str = Field("", alias="KOKORO_MODEL_PATH")
     kokoro_voices_path: str = Field("", alias="KOKORO_VOICES_PATH")
     kokoro_voice: str = Field("af_heart", alias="KOKORO_VOICE")

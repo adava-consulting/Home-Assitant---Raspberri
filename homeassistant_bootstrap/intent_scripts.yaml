@@ -102,6 +102,32 @@ BridgeStudioLightsBlue:
         dry_run: false
         source: "assist_fast_intent:studio_blue"
 
+BridgeMonitorSleep:
+  description: Fast local monitor sleep request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "sleep the monitor"
+        dry_run: false
+        source: "assist_fast_intent:monitor_sleep"
+
+BridgeMonitorWake:
+  description: Fast local monitor wake request routed through the bridge.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "wake the monitor"
+        dry_run: false
+        source: "assist_fast_intent:monitor_wake"
+
 BridgeGoodNight:
   description: Fast local bedtime routine for voice requests such as good night.
   async_action: true

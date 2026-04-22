@@ -15,6 +15,7 @@ from app.errors import BridgeError, UpstreamServiceError, ValidationError
 from app.health import build_health_payload
 from app.home_assistant import HomeAssistantClient
 from app.interpreter_factory import build_interpreter
+from app.monitor_control import MonitorControlService
 from app.models import (
     ActivityListResponse,
     AssistCommandRequest,
@@ -83,7 +84,11 @@ async def startup_event() -> None:
     settings = get_settings()
     _configure_logging(settings)
     app.state.settings = settings
-    app.state.home_assistant = HomeAssistantClient(settings)
+    app.state.monitor_control = MonitorControlService(settings)
+    app.state.home_assistant = HomeAssistantClient(
+        settings,
+        local_script_service=app.state.monitor_control,
+    )
     await app.state.home_assistant.start()
     app.state.interpreter_bundle = build_interpreter(settings)
     app.state.audio_output = AudioOutputService(settings)
