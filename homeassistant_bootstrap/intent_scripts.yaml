@@ -154,6 +154,19 @@ BridgeMacOpenSpotify:
         dry_run: false
         source: "assist_fast_intent:mac_open_spotify"
 
+BridgeMacOpenInstagram:
+  description: Fast local Mac request routed through the bridge to open Instagram.
+  async_action: true
+  mode: parallel
+  speech:
+    text: Done.
+  action:
+    - action: script.send_assist_command_to_bridge
+      data:
+        command_text: "open instagram on the mac"
+        dry_run: false
+        source: "assist_fast_intent:mac_open_instagram"
+
 BridgeMacOpenChatGPT:
   description: Fast local Mac request routed through the bridge to open ChatGPT.
   async_action: true

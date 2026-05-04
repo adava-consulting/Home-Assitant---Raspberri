@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import tempfile
 import wave
 from typing import Optional
@@ -18,6 +19,15 @@ from .models import ModelLoader
 from .transcript_safety import sanitize_transcript_text
 
 _LOGGER = logging.getLogger(__name__)
+_MATERIAL_TRANSCRIPT_NORMALIZER = re.compile(r"[^a-z0-9\s]")
+_MATERIAL_WHITESPACE = re.compile(r"\s+")
+
+
+def _material_transcript_key(text: str) -> str:
+    normalized = _MATERIAL_WHITESPACE.sub(" ", str(text or "").strip()).lower()
+    normalized = _MATERIAL_TRANSCRIPT_NORMALIZER.sub(" ", normalized)
+    normalized = _MATERIAL_WHITESPACE.sub(" ", normalized)
+    return normalized.strip()
 
 
 class DispatchEventHandler(AsyncEventHandler):
@@ -118,7 +128,7 @@ class DispatchEventHandler(AsyncEventHandler):
                 initial_prompt=self._loader.initial_prompt,
             )
             sanitized_text = sanitize_transcript_text(text, max_chars=500)
-            if sanitized_text != text:
+            if sanitized_text != text and _material_transcript_key(sanitized_text) != _material_transcript_key(text):
                 _LOGGER.warning(
                     "Sanitized suspicious transcript from %s to %s characters",
                     len(text),

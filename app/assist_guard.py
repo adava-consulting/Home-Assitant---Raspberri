@@ -24,7 +24,7 @@ class AssistGuardService:
         self._enabled = bool(getattr(settings, "assist_guard_enabled", True))
         self._recent_wake_window_seconds = max(
             1.0,
-            float(getattr(settings, "assist_guard_recent_wake_window_seconds", 20.0)),
+            float(getattr(settings, "assist_guard_recent_wake_window_seconds", 30.0)),
         )
         self._state_path = Path(
             getattr(

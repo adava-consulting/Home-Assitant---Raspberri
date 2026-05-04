@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 import logging
+import time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -53,9 +54,15 @@ class CommandOrchestrator:
     ) -> CommandResponse:
         request_source = self._normalize_source(source)
         original_text = str(text or "")
+        request_started_at = datetime.now(UTC)
+        request_started_perf = time.perf_counter()
+        timing_details: dict[str, Any] = {
+            "bridge_started_at": request_started_at.isoformat(),
+        }
         try:
             text = sanitize_voice_input(text)
         except ValueError as exc:
+            timing_details["bridge_total_ms"] = self._elapsed_ms(request_started_perf)
             if str(exc) == "repetition_loop":
                 await self._record_activity(
                     kind="command",
@@ -63,27 +70,47 @@ class CommandOrchestrator:
                     text=original_text,
                     dry_run=dry_run,
                     status="failed",
-                    details={"error": "repetition_loop"},
+                    details={"error": "repetition_loop", **timing_details},
                 )
                 raise ValidationError(
                     "The spoken command looked corrupted or repeated. Please try again."
                 ) from exc
-            raise
-
-        assist_guard_details: dict[str, Any] = {}
-        if self._assist_guard is not None:
-            try:
-                assist_guard_payload = await self._assist_guard.validate_and_consume(request_source)
-            except ValidationError as exc:
+            if str(exc) == "prompt_leakage":
                 await self._record_activity(
                     kind="command",
                     source=request_source,
                     text=original_text,
                     dry_run=dry_run,
                     status="failed",
-                    details={"error": str(exc), "guard": "assist_recent_wake"},
+                    details={"error": "prompt_leakage", **timing_details},
+                )
+                raise ValidationError(
+                    "The spoken command looked like a transcription prompt leak. Please try again."
+                ) from exc
+            raise
+
+        assist_guard_details: dict[str, Any] = {}
+        if self._assist_guard is not None:
+            assist_guard_started_perf = time.perf_counter()
+            try:
+                assist_guard_payload = await self._assist_guard.validate_and_consume(request_source)
+            except ValidationError as exc:
+                timing_details["assist_guard_ms"] = self._elapsed_ms(assist_guard_started_perf)
+                timing_details["bridge_total_ms"] = self._elapsed_ms(request_started_perf)
+                await self._record_activity(
+                    kind="command",
+                    source=request_source,
+                    text=original_text,
+                    dry_run=dry_run,
+                    status="failed",
+                    details={
+                        "error": str(exc),
+                        "guard": "assist_recent_wake",
+                        **timing_details,
+                    },
                 )
                 raise
+            timing_details["assist_guard_ms"] = self._elapsed_ms(assist_guard_started_perf)
             if isinstance(assist_guard_payload, dict):
                 assist_guard_details = assist_guard_payload
 
@@ -125,7 +152,9 @@ class CommandOrchestrator:
             )
             return response
 
+        state_fetch_started_perf = time.perf_counter()
         states = await self._home_assistant.get_states()
+        timing_details["state_fetch_ms"] = self._elapsed_ms(state_fetch_started_perf)
         target_capabilities = self._build_effective_target_capabilities(states)
         visible_states = [
             state
@@ -171,7 +200,9 @@ class CommandOrchestrator:
                     extra_details=assist_guard_details,
                 )
 
+        interpret_started_perf = time.perf_counter()
         plan = await self._interpreter.interpret(text, context)
+        timing_details["interpret_ms"] = self._elapsed_ms(interpret_started_perf)
         self._validate_plan(plan, target_capabilities)
 
         logger.info("Interpreted action plan: %s", plan.model_dump_json())
@@ -183,6 +214,7 @@ class CommandOrchestrator:
         saved_scene_created = False
         saved_scene_id: str | None = None
         if dry_run:
+            plan_apply_started_perf = time.perf_counter()
             if plan.saved_scene is not None:
                 results = [
                     {
@@ -227,7 +259,9 @@ class CommandOrchestrator:
                     for intent in plan.actions
                 ]
             executed = False
+            timing_details["plan_apply_ms"] = self._elapsed_ms(plan_apply_started_perf)
         elif plan.saved_scene is not None:
+            plan_apply_started_perf = time.perf_counter()
             if self._saved_scenes is None:
                 raise ValidationError("Saved scenes are not available.")
             saved_scene_id = await self._saved_scenes.create_scene(text, plan)
@@ -243,7 +277,9 @@ class CommandOrchestrator:
                 for intent in plan.actions
             ]
             executed = False
+            timing_details["plan_apply_ms"] = self._elapsed_ms(plan_apply_started_perf)
         elif plan.routine is not None:
+            plan_apply_started_perf = time.perf_counter()
             if self._routines is None:
                 raise ValidationError("Routines are not available.")
             routine_id = await self._routines.create_routine(text, plan)
@@ -259,7 +295,9 @@ class CommandOrchestrator:
                 for intent in plan.actions
             ]
             executed = False
+            timing_details["plan_apply_ms"] = self._elapsed_ms(plan_apply_started_perf)
         elif plan.schedule is not None:
+            plan_apply_started_perf = time.perf_counter()
             if self._scheduler is None:
                 raise ValidationError("Scheduling is not available.")
             scheduled_job_id = await self._scheduler.schedule_plan(text, plan)
@@ -274,11 +312,14 @@ class CommandOrchestrator:
                 for intent in plan.actions
             ]
             executed = False
+            timing_details["plan_apply_ms"] = self._elapsed_ms(plan_apply_started_perf)
         else:
+            plan_apply_started_perf = time.perf_counter()
             if self._state_memory is not None:
                 await self._state_memory.capture_before_plan(plan)
             results = await self._home_assistant.execute_plan(plan)
             executed = True
+            timing_details["plan_apply_ms"] = self._elapsed_ms(plan_apply_started_perf)
 
         logger.info("Executed: %s", executed)
         generated_assistant_response = self._build_assistant_response(
@@ -296,6 +337,7 @@ class CommandOrchestrator:
             else plan.assistant_response or generated_assistant_response
         )
         if not dry_run and self._audio_output is not None:
+            audio_enqueue_started_perf = time.perf_counter()
             await self._audio_output.enqueue(
                 self._build_spoken_response(
                     plan=plan,
@@ -304,6 +346,9 @@ class CommandOrchestrator:
                     scheduled=scheduled,
                 )
             )
+            timing_details["audio_enqueue_ms"] = self._elapsed_ms(audio_enqueue_started_perf)
+
+        timing_details["bridge_total_ms"] = self._elapsed_ms(request_started_perf)
 
         response = CommandResponse(
             text=text,
@@ -332,7 +377,7 @@ class CommandOrchestrator:
                 saved_scene_created=saved_scene_created,
                 executed=executed,
             ),
-            extra_details=assist_guard_details,
+            extra_details={**assist_guard_details, **timing_details},
         )
         return response
 
@@ -346,13 +391,22 @@ class CommandOrchestrator:
         extra_details: dict[str, Any] | None = None,
     ) -> CommandResponse:
         normalized_source = self._normalize_source(source)
+        request_started_at = datetime.now(UTC)
+        request_started_perf = time.perf_counter()
+        timing_details: dict[str, Any] = {
+            "bridge_started_at": request_started_at.isoformat(),
+        }
         assist_guard_details = dict(extra_details or {})
         if self._assist_guard is not None and not assist_guard_details:
+            assist_guard_started_perf = time.perf_counter()
             assist_guard_payload = await self._assist_guard.validate_and_consume(normalized_source)
+            timing_details["assist_guard_ms"] = self._elapsed_ms(assist_guard_started_perf)
             if isinstance(assist_guard_payload, dict):
                 assist_guard_details = assist_guard_payload
 
+        state_fetch_started_perf = time.perf_counter()
         states = await self._home_assistant.get_states()
+        timing_details["state_fetch_ms"] = self._elapsed_ms(state_fetch_started_perf)
         target_capabilities = self._build_effective_target_capabilities(states)
         plan = ActionPlan(
             actions=list(saved_scene.actions),
@@ -362,6 +416,7 @@ class CommandOrchestrator:
         self._validate_plan(plan, target_capabilities)
 
         if dry_run:
+            plan_apply_started_perf = time.perf_counter()
             results = [
                 {
                     "message": "Dry run only. No saved scene action executed.",
@@ -374,11 +429,14 @@ class CommandOrchestrator:
                 for intent in plan.actions
             ]
             executed = False
+            timing_details["plan_apply_ms"] = self._elapsed_ms(plan_apply_started_perf)
         else:
+            plan_apply_started_perf = time.perf_counter()
             if self._state_memory is not None:
                 await self._state_memory.capture_before_plan(plan)
             results = await self._home_assistant.execute_plan(plan)
             executed = True
+            timing_details["plan_apply_ms"] = self._elapsed_ms(plan_apply_started_perf)
 
         assistant_response = plan.assistant_response or self._build_assistant_response(
             plan=plan,
@@ -390,6 +448,7 @@ class CommandOrchestrator:
             saved_scene_created=False,
         )
         if not dry_run and self._audio_output is not None:
+            audio_enqueue_started_perf = time.perf_counter()
             await self._audio_output.enqueue(
                 self._build_spoken_response(
                     plan=plan,
@@ -398,6 +457,9 @@ class CommandOrchestrator:
                     scheduled=False,
                 )
             )
+            timing_details["audio_enqueue_ms"] = self._elapsed_ms(audio_enqueue_started_perf)
+
+        timing_details["bridge_total_ms"] = self._elapsed_ms(request_started_perf)
 
         response = CommandResponse(
             text=text,
@@ -417,7 +479,7 @@ class CommandOrchestrator:
             response,
             source=normalized_source,
             status="dry_run" if dry_run else "executed",
-            extra_details=assist_guard_details,
+            extra_details={**assist_guard_details, **timing_details},
         )
         return response
 
@@ -497,6 +559,10 @@ class CommandOrchestrator:
     def _normalize_source(self, source: str | None) -> str:
         normalized = " ".join(str(source or "api").split()).lower()
         return normalized[:80] or "api"
+
+    @staticmethod
+    def _elapsed_ms(started_perf: float) -> int:
+        return max(0, round((time.perf_counter() - started_perf) * 1000))
 
     def _build_prompt_target_capabilities(
         self,

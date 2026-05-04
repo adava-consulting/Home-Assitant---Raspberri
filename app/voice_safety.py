@@ -5,6 +5,18 @@ import re
 
 _NORMALIZE_PATTERN = re.compile(r"[^a-z0-9\s]")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
+_PROMPT_EXAMPLE_KEYS = (
+    "turn on the studio lights",
+    "turn off the studio lights",
+    "turn on the room lights",
+    "turn off the room lights",
+    "open youtube on the mac",
+    "enciende las luces del estudio",
+    "apaga las luces del estudio",
+    "enciende las luces de room",
+    "apaga las luces de room",
+    "abre youtube en la mac",
+)
 
 
 def normalize_text(text: str) -> str:
@@ -49,8 +61,23 @@ def looks_like_repetition_loop(text: str) -> bool:
     return False
 
 
+def looks_like_prompt_leakage(text: str) -> bool:
+    key = normalized_text_key(text)
+    if not key:
+        return False
+
+    matched_examples = {
+        example
+        for example in _PROMPT_EXAMPLE_KEYS
+        if re.search(rf"\b{re.escape(example)}\b", key)
+    }
+    return len(matched_examples) >= 2
+
+
 def sanitize_voice_input(text: str) -> str:
     normalized = normalize_text(text)
+    if looks_like_prompt_leakage(normalized):
+        raise ValueError("prompt_leakage")
     if looks_like_repetition_loop(normalized):
         raise ValueError("repetition_loop")
     return normalized

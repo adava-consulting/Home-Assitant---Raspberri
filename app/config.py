@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     audio_response_fast_ack_text: str = Field("Done.", alias="AUDIO_RESPONSE_FAST_ACK_TEXT")
     assist_guard_enabled: bool = Field(True, alias="ASSIST_GUARD_ENABLED")
     assist_guard_recent_wake_window_seconds: float = Field(
-        20.0,
+        45.0,
         alias="ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS",
     )
     assist_guard_state_file: str = Field(

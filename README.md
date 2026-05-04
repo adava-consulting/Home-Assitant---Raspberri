@@ -822,7 +822,7 @@ The bridge now keeps a small amount of voice-safety state so we can correlate:
 Relevant `.env` knobs:
 
 - `ASSIST_GUARD_ENABLED=1`
-- `ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=20`
+- `ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=45`
 - `ACTIVITY_LOG_MAX_ENTRIES=200`
 
 Useful diagnostics:

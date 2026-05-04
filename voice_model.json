@@ -1,6 +1,5 @@
 {
   "allowed_entities": [
-    "light.cuarto",
     "light.room",
     "light.studio"
   ],
@@ -15,6 +14,7 @@
     "script.monitor_wake",
     "script.mac_open_youtube",
     "script.mac_open_spotify",
+    "script.mac_open_instagram",
     "script.mac_open_chatgpt",
     "script.mac_open_safari"
   ],
@@ -39,8 +39,13 @@
   "target_overrides": {
     "light.cuarto": {
       "aliases": [
+        "cuarto",
         "cuarto light",
-        "cuarto lights"
+        "cuarto lights",
+        "luces del cuarto",
+        "luces de cuarto",
+        "luz del cuarto",
+        "luz de cuarto"
       ],
       "actions": [
         "turn_on",
@@ -50,10 +55,37 @@
     },
     "light.room": {
       "aliases": [
+        "room",
         "room light",
         "room lights",
+        "bedroom",
         "bedroom light",
-        "bedroom lights"
+        "bedroom lights",
+        "cuarto",
+        "cuarto light",
+        "cuarto lights",
+        "dormitorio",
+        "dormitorio light",
+        "dormitorio lights",
+        "habitacion",
+        "habitacion light",
+        "habitacion lights",
+        "luces del cuarto",
+        "luces de cuarto",
+        "luz del cuarto",
+        "luz de cuarto",
+        "luces del dormitorio",
+        "luces de dormitorio",
+        "luz del dormitorio",
+        "luz de dormitorio",
+        "luces de la habitacion",
+        "luces del habitacion",
+        "luz de la habitacion",
+        "luz del habitacion",
+        "luces del room",
+        "luces de room",
+        "luz del room",
+        "luz de room"
       ],
       "actions": [
         "turn_on",
@@ -63,10 +95,24 @@
     },
     "light.studio": {
       "aliases": [
+        "studio",
+        "estudio",
         "studio light",
         "studio lights",
+        "story lights",
         "studio lamp",
-        "studio lamps"
+        "studio lamps",
+        "studio lines",
+        "estudio light",
+        "estudio lights",
+        "luces del estudio",
+        "luces de estudio",
+        "luz del estudio",
+        "luz de estudio",
+        "luces del studio",
+        "luces de studio",
+        "luz del studio",
+        "luz de studio"
       ],
       "actions": [
         "turn_on",
@@ -124,33 +170,56 @@
     },
     "script.mac_open_youtube": {
       "aliases": [
+        "open youtube",
+        "open you tube",
         "open youtube on the mac",
         "open youtube on mac",
         "open youtube on my mac",
-        "launch youtube on the mac"
+        "open june on the mac",
+        "launch youtube",
+        "launch you tube",
+        "launch youtube on the mac",
+        "launch june on the mac"
       ]
     },
     "script.mac_open_spotify": {
       "aliases": [
+        "open spotify",
         "open spotify on the mac",
         "open spotify on mac",
         "open spotify on my mac",
+        "launch spotify",
         "launch spotify on the mac"
+      ]
+    },
+    "script.mac_open_instagram": {
+      "aliases": [
+        "open instagram",
+        "open instagram on the mac",
+        "open instagram on mac",
+        "open instagram on my mac",
+        "open instagram on the market",
+        "launch instagram",
+        "launch instagram on the mac"
       ]
     },
     "script.mac_open_chatgpt": {
       "aliases": [
+        "open chatgpt",
         "open chatgpt on the mac",
         "open chatgpt on mac",
         "open chatgpt on my mac",
+        "launch chatgpt",
         "launch chatgpt on the mac"
       ]
     },
     "script.mac_open_safari": {
       "aliases": [
+        "open safari",
         "open safari on the mac",
         "open safari on mac",
         "open safari on my mac",
+        "launch safari",
         "launch safari on the mac"
       ]
     }

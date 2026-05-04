@@ -74,6 +74,35 @@ class MacControlServiceTests(unittest.IsolatedAsyncioTestCase):
                     Intent(action="run_script", target="script.mac_open_spotify", parameters={})
                 )
 
+    async def test_executes_open_instagram_command_over_ssh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            key_path = Path(temp_dir) / "bridge-key"
+            key_path.write_text("dummy", encoding="utf-8")
+
+            settings = FakeSettings()
+            settings.mac_control_ssh_key_path = str(key_path)
+            service = MacControlService(settings)
+            captured_command = {}
+
+            async def fake_create_subprocess_exec(*args, **kwargs):
+                captured_command["args"] = list(args)
+                return _FakeProcess(stdout=b"action=open_instagram url=https://www.instagram.com/\n")
+
+            with (
+                patch("app.mac_control.shutil.which", return_value="/usr/bin/ssh"),
+                patch("app.mac_control.asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec),
+            ):
+                result = await service.execute_intent(
+                    Intent(action="run_script", target="script.mac_open_instagram", parameters={})
+                )
+
+        self.assertEqual(result["service"], "remote.mac_control")
+        self.assertEqual(result["response"]["command"], "open_instagram")
+        self.assertEqual(
+            captured_command["args"][-1],
+            "/Users/marcos/ha-command-bridge/mac_tools/mac_control.sh open_instagram",
+        )
+
     async def test_raises_when_remote_command_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             key_path = Path(temp_dir) / "bridge-key"

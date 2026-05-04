@@ -272,6 +272,32 @@ class CommandOrchestratorTests(unittest.TestCase):
         self.assertEqual(activity_log.entries[0]["source"], "assist_conversation")
         self.assertEqual(activity_log.entries[0]["status"], "executed")
 
+    def test_records_timing_details_for_executed_command(self):
+        activity_log = FakeActivityLog()
+        orchestrator = CommandOrchestrator(
+            FakeSettings(),
+            FakeHomeAssistantClient(),
+            FakeInterpreter(single_action_plan("turn_off", "light.living_room")),
+            activity_log=activity_log,
+        )
+
+        response = asyncio.run(
+            orchestrator.process(
+                "turn off the living room light",
+                dry_run=False,
+                source="assist_conversation",
+            )
+        )
+
+        self.assertTrue(response.executed)
+        details = activity_log.entries[0]["details"]
+        self.assertIn("bridge_started_at", details)
+        self.assertIn("bridge_total_ms", details)
+        self.assertIn("state_fetch_ms", details)
+        self.assertIn("interpret_ms", details)
+        self.assertIn("plan_apply_ms", details)
+        self.assertIsInstance(details["bridge_total_ms"], int)
+
     def test_normalizes_activity_source_to_lowercase(self):
         activity_log = FakeActivityLog()
         orchestrator = CommandOrchestrator(
@@ -1316,6 +1342,240 @@ class LocalInterpreterTests(unittest.TestCase):
         self.assertEqual(intent.primary_intent.action, "run_script")
         self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
 
+    def test_matches_short_mac_open_youtube_alias(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_youtube"],
+                "target_capabilities": {
+                    "script.mac_open_youtube": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open youtube", "launch youtube"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("launch youtube", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
+
+    def test_matches_open_june_on_the_mac_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_youtube"],
+                "target_capabilities": {
+                    "script.mac_open_youtube": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open youtube on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("Open June on the Mac", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
+
+    def test_matches_launch_june_on_the_mac_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_youtube"],
+                "target_capabilities": {
+                    "script.mac_open_youtube": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open youtube on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("Launch June on the Mac", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
+
+    def test_matches_open_you_tube_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_youtube"],
+                "target_capabilities": {
+                    "script.mac_open_youtube": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open youtube"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("Open You Tube", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
+
+    def test_matches_over_youtube_from_the_max_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_youtube"],
+                "target_capabilities": {
+                    "script.mac_open_youtube": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open youtube on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("over youtube from the max", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
+
+    def test_matches_go_with_youtube_on_the_mac_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_youtube"],
+                "target_capabilities": {
+                    "script.mac_open_youtube": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open youtube on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("Go with YouTube on the Mac", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_youtube")
+
+    def test_matches_open_instagram_on_the_market_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_instagram"],
+                "target_capabilities": {
+                    "script.mac_open_instagram": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open instagram on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("Open Instagram on the market", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_instagram")
+
+    def test_matches_open_instagram_on_the_back_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_instagram"],
+                "target_capabilities": {
+                    "script.mac_open_instagram": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open instagram on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("Open Instagram on the back", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_instagram")
+
+    def test_fuzzy_closed_command_matches_script_typo(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": [],
+                "allowed_scenes": [],
+                "allowed_scripts": ["script.mac_open_instagram"],
+                "target_capabilities": {
+                    "script.mac_open_instagram": {
+                        "kind": "script",
+                        "domain": "script",
+                        "aliases": ["open instagram on the mac"],
+                        "actions": {"run_script": {"parameters": {}}},
+                        "security": "normal",
+                    }
+                },
+            },
+        )()
+
+        intent = asyncio.run(interpreter.interpret("Open instigram on the Mac", context))
+
+        self.assertEqual(intent.primary_intent.action, "run_script")
+        self.assertEqual(intent.primary_intent.target, "script.mac_open_instagram")
+
     def test_matches_mac_open_spotify_script(self):
         interpreter = LocalInterpreter(FakeSettings())
         context = type(
@@ -1591,6 +1851,32 @@ class LocalInterpreterTests(unittest.TestCase):
 
 
 class InterpreterFactoryTests(unittest.TestCase):
+    def _context_for_targets(
+        self,
+        *,
+        allowed_entities: list[str],
+        target_overrides: dict | None = None,
+        states: list[dict] | None = None,
+    ):
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=allowed_entities,
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides=target_overrides or {},
+        )
+        payload = {
+            "allowed_entities": allowed_entities,
+            "allowed_scenes": [],
+            "allowed_scripts": [],
+            "target_capabilities": {
+                target_id: capabilities.to_prompt_dict()
+                for target_id, capabilities in target_capabilities.items()
+            },
+        }
+        if states is not None:
+            payload["states"] = states
+        return type("Context", (), payload)()
+
     def test_fallback_interpreter_uses_local_rules(self):
         fallback = FallbackInterpreter(
             primary=FailingInterpreter(),
@@ -1783,6 +2069,36 @@ class InterpreterFactoryTests(unittest.TestCase):
         self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
         self.assertTrue(all(intent.action == "turn_off" for intent in plan.actions))
 
+    def test_local_interpreter_routes_turn_off_all_the_lights_phrase_to_all_home_lights(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room", "light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room", "light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("turn off all the lights", context))
+
+        self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
+        self.assertTrue(all(intent.action == "turn_off" for intent in plan.actions))
+
     def test_local_interpreter_routes_turn_all_lights_on_phrase_to_all_home_lights(self):
         interpreter = LocalInterpreter(FakeSettings())
         target_capabilities = build_target_capabilities_from_lists(
@@ -1809,6 +2125,36 @@ class InterpreterFactoryTests(unittest.TestCase):
         )()
 
         plan = asyncio.run(interpreter.interpret("turn all lights on", context))
+
+        self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
+        self.assertTrue(all(intent.action == "turn_on" for intent in plan.actions))
+
+    def test_local_interpreter_routes_turn_on_every_light_phrase_to_all_home_lights(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        target_capabilities = build_target_capabilities_from_lists(
+            allowed_entities=["light.room", "light.studio"],
+            allowed_scenes=[],
+            allowed_scripts=[],
+            target_overrides={
+                "light.room": {"aliases": ["room lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+                "light.studio": {"aliases": ["studio lights"], "actions": ["turn_on", "turn_off", "get_state"]},
+            },
+        )
+        context = type(
+            "Context",
+            (),
+            {
+                "allowed_entities": ["light.room", "light.studio"],
+                "allowed_scenes": [],
+                "allowed_scripts": [],
+                "target_capabilities": {
+                    target_id: capabilities.to_prompt_dict()
+                    for target_id, capabilities in target_capabilities.items()
+                },
+            },
+        )()
+
+        plan = asyncio.run(interpreter.interpret("turn on every light", context))
 
         self.assertEqual([intent.target for intent in plan.actions], ["light.room", "light.studio"])
         self.assertTrue(all(intent.action == "turn_on" for intent in plan.actions))
@@ -1894,6 +2240,80 @@ class InterpreterFactoryTests(unittest.TestCase):
         )()
 
         plan = asyncio.run(interpreter.interpret("change the studio lights to blue", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.parameters, {"rgb_color": [0, 0, 255]})
+
+    def test_local_interpreter_parses_spanish_studio_on_and_off(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights", "luces del estudio", "luces de estudio"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        turn_on = asyncio.run(interpreter.interpret("enciende las luces del estudio", context))
+        turn_off = asyncio.run(interpreter.interpret("apaga las luces del estudio", context))
+
+        self.assertEqual(turn_on.primary_intent.action, "turn_on")
+        self.assertEqual(turn_on.primary_intent.target, "light.studio")
+        self.assertEqual(turn_off.primary_intent.action, "turn_off")
+        self.assertEqual(turn_off.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_parses_spanish_studio_color_at_phrase_end(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights", "luces del estudio", "luces de studio"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("pon las luces del estudio azules", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.parameters, {"rgb_color": [0, 0, 255]})
+
+    def test_local_interpreter_parses_spanish_studio_color_with_preposition(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights", "luces del estudio", "luces de estudio"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("cambia las luces del estudio a rojo", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.parameters, {"rgb_color": [255, 0, 0]})
+
+    def test_local_interpreter_parses_bare_studio_color_phrase(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights", "luces del estudio"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("luces del estudio azul", context))
 
         self.assertEqual(plan.primary_intent.action, "turn_on")
         self.assertEqual(plan.primary_intent.target, "light.studio")
@@ -2074,7 +2494,7 @@ class InterpreterFactoryTests(unittest.TestCase):
         self.assertEqual(plan.primary_intent.target, "light.room")
         self.assertEqual(plan.primary_intent.parameters, {"brightness_pct": 100})
 
-    def test_local_interpreter_rejects_turn_off_with_brightness_modifier(self):
+    def test_local_interpreter_repairs_turn_off_with_brightness_modifier(self):
         interpreter = LocalInterpreter(FakeSettings())
         target_capabilities = build_target_capabilities_from_lists(
             allowed_entities=["light.studio"],
@@ -2098,13 +2518,16 @@ class InterpreterFactoryTests(unittest.TestCase):
             },
         )()
 
-        with self.assertRaisesRegex(ValidationError, "cannot safely combine turning lights off"):
-            asyncio.run(
-                interpreter.interpret(
-                    "turn off the studio lights to 50 percent brightness",
-                    context,
-                )
+        plan = asyncio.run(
+            interpreter.interpret(
+                "turn off the studio lights to 50 percent brightness",
+                context,
             )
+        )
+
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+        self.assertEqual(plan.primary_intent.action, "turn_off")
+        self.assertEqual(plan.primary_intent.parameters, {})
 
     def test_local_interpreter_parses_split_turn_off_phrase(self):
         interpreter = LocalInterpreter(FakeSettings())
@@ -2134,6 +2557,230 @@ class InterpreterFactoryTests(unittest.TestCase):
 
         self.assertEqual(plan.primary_intent.target, "light.studio")
         self.assertEqual(plan.primary_intent.action, "turn_off")
+
+    def test_local_interpreter_parses_bare_studio_lights_on_off_phrases(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        turn_on = asyncio.run(interpreter.interpret("studio lights on", context))
+        turn_off = asyncio.run(interpreter.interpret("studio lights off", context))
+
+        self.assertEqual(turn_on.primary_intent.action, "turn_on")
+        self.assertEqual(turn_on.primary_intent.target, "light.studio")
+        self.assertEqual(turn_off.primary_intent.action, "turn_off")
+        self.assertEqual(turn_off.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_dont_burn_mistranscript_for_lights(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("Don't burn the studio lights", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_story_lights_mistranscript_for_turn_on(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("Turn the story lights on", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_dont_want_mistranscript_for_lights(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("Don't want the studio lights", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_dont_own_mistranscript_for_lights(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("Don't own the studio lights", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_tomb_of_stony_lights_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("Tomb of the Stony Lights", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_off")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_tour_of_studio_lights_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("tour of the studio lights", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_off")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_dont_off_their_womb_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.room"],
+            target_overrides={
+                "light.room": {
+                    "aliases": ["room", "room lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("Don't off their womb", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_off")
+        self.assertEqual(plan.primary_intent.target, "light.room")
+
+    def test_fuzzy_closed_command_matches_light_typo(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("turn of the stodio lights", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_off")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_fuzzy_closed_command_rejects_generic_light_noise(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.room", "light.studio"],
+            target_overrides={
+                "light.room": {
+                    "aliases": ["room lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                },
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                },
+            },
+        )
+
+        with self.assertRaises(ValidationError):
+            asyncio.run(interpreter.interpret("turn of the lights", context))
+
+    def test_local_interpreter_repairs_to_front_studio_lines_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("To front the studio lines", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_repairs_two_times_studio_lights_mistranscript(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        plan = asyncio.run(interpreter.interpret("Two times the studio lights", context))
+
+        self.assertEqual(plan.primary_intent.action, "turn_on")
+        self.assertEqual(plan.primary_intent.target, "light.studio")
+
+    def test_local_interpreter_does_not_treat_bare_light_state_question_as_action(self):
+        interpreter = LocalInterpreter(FakeSettings())
+        context = self._context_for_targets(
+            allowed_entities=["light.studio"],
+            target_overrides={
+                "light.studio": {
+                    "aliases": ["studio lights"],
+                    "actions": ["turn_on", "turn_off", "get_state"],
+                }
+            },
+        )
+
+        with self.assertRaises(ValidationError):
+            asyncio.run(interpreter.interpret("are the studio lights off", context))
 
     def test_local_interpreter_prefers_trailing_off_in_contradictory_phrase(self):
         interpreter = LocalInterpreter(FakeSettings())

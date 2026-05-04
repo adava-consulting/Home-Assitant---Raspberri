@@ -4,7 +4,7 @@ set -euo pipefail
 action="${1:-}"
 
 if [[ -z "$action" ]]; then
-  echo "usage: mac_control.sh <open_youtube|open_spotify|open_chatgpt|open_safari>" >&2
+  echo "usage: mac_control.sh <open_youtube|open_spotify|open_instagram|open_chatgpt|open_safari>" >&2
   exit 1
 fi
 
@@ -24,6 +24,9 @@ case "$action" in
     else
       open_url "https://open.spotify.com/"
     fi
+    ;;
+  open_instagram)
+    open_url "https://www.instagram.com/"
     ;;
   open_chatgpt)
     open_url "https://chatgpt.com/"

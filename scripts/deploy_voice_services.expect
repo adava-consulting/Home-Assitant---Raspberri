@@ -33,10 +33,10 @@ proc run_with_password {password command_args} {
 }
 
 run_with_password $password [list ssh -o StrictHostKeyChecking=accept-new $remote mkdir -p $remote_dir]
-set rsync_args [list rsync -av --exclude __pycache__ --exclude whisper-data --exclude piper-data --exclude .env]
+set rsync_args [list rsync -av --exclude __pycache__ --exclude whisper-data --exclude speech-to-phrase-models --exclude speech-to-phrase-train --exclude piper-data --exclude .env]
 lappend rsync_args "$local_dir/" "$remote:$remote_dir/"
 run_with_password $password $rsync_args
-run_with_password $password [list ssh $remote "chmod +x $remote_dir/run_wyoming_satellite.sh $remote_dir/satellite_watchdog_hook.sh $remote_dir/satellite_watchdog_check.sh 2>/dev/null || true"]
+run_with_password $password [list ssh $remote "chmod +x $remote_dir/run_wyoming_satellite.sh $remote_dir/satellite_watchdog_hook.sh $remote_dir/satellite_watchdog_check.sh $remote_dir/configure_voice_services_env.sh 2>/dev/null || true"]
 
-set deploy_cmd "cd $remote_dir && docker compose up --build -d --remove-orphans && docker compose ps"
+set deploy_cmd "bash -lc 'set -e; cd \"$remote_dir\"; ./configure_voice_services_env.sh; docker compose stop whisper >/dev/null 2>&1 || true; docker compose rm -f whisper >/dev/null 2>&1 || true; docker compose up --build -d --remove-orphans openwakeword speech-to-phrase piper; docker compose ps'"
 run_with_password $password [list ssh $remote $deploy_cmd]

@@ -177,9 +177,11 @@ class HomeAssistantClient:
 
         expanded_intents = await self._expand_group_intent(intent)
         if len(expanded_intents) > 1:
-            results: list[dict[str, Any]] = []
-            for expanded_intent in expanded_intents:
-                results.append(await self._execute_single_intent(expanded_intent))
+            results = list(
+                await asyncio.gather(
+                    *(self._execute_single_intent(expanded_intent) for expanded_intent in expanded_intents)
+                )
+            )
             return {
                 "service": "group.expand",
                 "target": {"entity_id": intent.target},

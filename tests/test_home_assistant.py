@@ -163,7 +163,7 @@ class GroupExpansionTests(unittest.IsolatedAsyncioTestCase):
             ["light.office_light_1", "light.office_light_2", "light.office_light_3"],
         )
 
-    async def test_expands_simple_group_turn_off_to_members(self):
+    async def test_simple_group_turn_off_expands_to_members(self):
         client = FakeGroupAwareHomeAssistantClient(
             {
                 "light.office": {
@@ -188,6 +188,7 @@ class GroupExpansionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["service"], "group.expand")
+        self.assertEqual(result["expanded_targets"], ["light.office_light_1", "light.office_light_2"])
         self.assertEqual(
             [intent.target for intent in client.executed_intents],
             ["light.office_light_1", "light.office_light_2"],
@@ -234,7 +235,7 @@ class ExpansionRuleTests(unittest.TestCase):
             )
         )
 
-    def test_light_power_group_changes_expand(self):
+    def test_simple_light_power_group_changes_expand(self):
         self.assertTrue(should_expand_group_action("light.office", "turn_off", {}))
 
     def test_fan_percentage_changes_expand(self):

@@ -4,46 +4,80 @@ intents:
     data:
       - sentences:
           - "(lights on|all lights on)"
+          - "all the lights on"
           - "<turn_on_verb> on [all [of] [the]] lights"
           - "<turn_on_verb> [all [of] [the]] lights on"
+          - "<turn_on_verb> on every light"
+          - "<turn_on_verb> every light on"
+          - "<turn_on_verb> on [the] house lights"
+          - "<turn_on_verb> [the] house lights on"
+          - "<turn_on_verb> on [the] home lights"
+          - "<turn_on_verb> [the] home lights on"
   BridgeAllLightsOff:
     data:
       - sentences:
           - "(lights off|all lights off)"
+          - "all the lights off"
           - "<turn_off_verb> off [all [of] [the]] lights"
           - "<turn_off_verb> [all [of] [the]] lights off"
           - "shut [all [of] [the]] lights off"
+          - "<turn_off_verb> off every light"
+          - "<turn_off_verb> every light off"
+          - "<turn_off_verb> off [the] house lights"
+          - "<turn_off_verb> [the] house lights off"
+          - "<turn_off_verb> off [the] home lights"
+          - "<turn_off_verb> [the] home lights off"
   BridgeRoomLightsOn:
     data:
       - sentences:
           - "<turn_on_verb> on [the] room lights"
           - "<turn_on_verb> [the] room lights on"
+          - "room lights on"
+          - "lights on in [the] room"
           - "<turn_on_verb> on [the] bedroom lights"
           - "<turn_on_verb> [the] bedroom lights on"
+          - "bedroom lights on"
+          - "lights on in [the] bedroom"
+          - "(enciende|encienda|encender|prende|prenda|prender) [las] luces (de|del) room"
+          - "(enciende|encienda|encender|prende|prenda|prender) [la] luz (de|del) room"
   BridgeRoomLightsOff:
     data:
       - sentences:
           - "<turn_off_verb> off [the] room lights"
           - "<turn_off_verb> [the] room lights off"
+          - "room lights off"
+          - "lights off in [the] room"
           - "shut [the] room lights off"
           - "<turn_off_verb> off [the] bedroom lights"
           - "<turn_off_verb> [the] bedroom lights off"
+          - "bedroom lights off"
+          - "lights off in [the] bedroom"
           - "shut [the] bedroom lights off"
+          - "(apaga|apague|apagar) [las] luces (de|del) room"
+          - "(apaga|apague|apagar) [la] luz (de|del) room"
   BridgeStudioLightsOn:
     data:
       - sentences:
           - "<turn_on_verb> on [the] studio lights"
           - "<turn_on_verb> [the] studio lights on"
+          - "studio lights on"
+          - "lights on in [the] studio"
           - "<turn_on_verb> on [the] studio lamp"
           - "<turn_on_verb> on [the] studio lamps"
+          - "(enciende|encienda|encender|prende|prenda|prender) [las] luces (de|del) (studio|estudio)"
+          - "(enciende|encienda|encender|prende|prenda|prender) [la] luz (de|del) (studio|estudio)"
   BridgeStudioLightsOff:
     data:
       - sentences:
           - "<turn_off_verb> off [the] studio lights"
           - "<turn_off_verb> [the] studio lights off"
+          - "studio lights off"
+          - "lights off in [the] studio"
           - "shut [the] studio lights off"
           - "<turn_off_verb> off [the] studio lamp"
           - "<turn_off_verb> off [the] studio lamps"
+          - "(apaga|apague|apagar) [las] luces (de|del) (studio|estudio)"
+          - "(apaga|apague|apagar) [la] luz (de|del) (studio|estudio)"
   BridgeStudioLightsBrightness50:
     data:
       - sentences:
@@ -77,8 +111,14 @@ intents:
   BridgeMacOpenYouTube:
     data:
       - sentences:
+          - "open youtube"
+          - "launch youtube"
+          - "open you tube"
+          - "launch you tube"
           - "open youtube on [the] mac"
           - "launch youtube on [the] mac"
+          - "open june on [the] mac"
+          - "launch june on [the] mac"
           - "open youtube on my mac"
   BridgeMacOpenSpotify:
     data:
@@ -86,6 +126,12 @@ intents:
           - "open spotify on [the] mac"
           - "launch spotify on [the] mac"
           - "open spotify on my mac"
+  BridgeMacOpenInstagram:
+    data:
+      - sentences:
+          - "open instagram on [the] mac"
+          - "launch instagram on [the] mac"
+          - "open instagram on my mac"
   BridgeMacOpenChatGPT:
     data:
       - sentences:

@@ -2,6 +2,7 @@ import unittest
 
 from app.voice_safety import (
     looks_like_repetition_loop,
+    looks_like_prompt_leakage,
     sanitize_spoken_response,
     sanitize_voice_input,
 )
@@ -23,6 +24,19 @@ class VoiceSafetyTests(unittest.TestCase):
     def test_sanitize_voice_input_rejects_repetition_loop(self):
         with self.assertRaises(ValueError):
             sanitize_voice_input("Turn off the lights " * 12)
+
+    def test_prompt_leakage_detects_multiple_prompt_examples(self):
+        self.assertTrue(
+            looks_like_prompt_leakage(
+                "Enciende las luces del estudio. Enciende las luces de room. Abre youtube en la mac."
+            )
+        )
+
+    def test_sanitize_voice_input_rejects_prompt_leakage(self):
+        with self.assertRaises(ValueError):
+            sanitize_voice_input(
+                "Enciende las luces del estudio. Enciende las luces de room. Abre youtube en la mac."
+            )
 
     def test_sanitize_spoken_response_replaces_validation_error_blob(self):
         text = "[{'type': 'string_too_long', 'msg': 'String should have at most 500 characters'}]"

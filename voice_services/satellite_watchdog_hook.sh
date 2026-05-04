@@ -18,13 +18,14 @@ fi
 : "${SATELLITE_STREAMING_TIMEOUT_SECONDS:=20}"
 : "${SATELLITE_WATCHDOG_STATE_FILE:=/tmp/wyoming-satellite-watchdog.state}"
 : "${SATELLITE_NAME:=respeaker-lite}"
-: "${SATELLITE_NO_SPEECH_TIMEOUT_SECONDS:=7}"
+: "${SATELLITE_NO_SPEECH_TIMEOUT_SECONDS:=0}"
 : "${SATELLITE_NO_SPEECH_STATE_FILE:=/tmp/wyoming-satellite-no-speech.state}"
 : "${SATELLITE_NO_SPEECH_RESTART_COMMAND:=pkill -TERM -f \"/opt/wyoming-satellite/script/run --name ${SATELLITE_NAME}\"}"
-: "${SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS:=12}"
+: "${SATELLITE_STT_STARTED_STATE_FILE:=/tmp/wyoming-satellite-stt-started.state}"
+: "${SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS:=0}"
 : "${SATELLITE_TRANSCRIPT_TIMEOUT_STATE_FILE:=/tmp/wyoming-satellite-transcript.state}"
 : "${SATELLITE_TRANSCRIPT_TIMEOUT_RESTART_COMMAND:=${SATELLITE_NO_SPEECH_RESTART_COMMAND}}"
-: "${SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS:=2}"
+: "${SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS:=0}"
 : "${SATELLITE_POST_TRANSCRIPT_STATE_FILE:=/tmp/wyoming-satellite-post-transcript.state}"
 : "${SATELLITE_POST_TRANSCRIPT_RESTART_COMMAND:=${SATELLITE_NO_SPEECH_RESTART_COMMAND}}"
 : "${SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY:=0}"
@@ -93,6 +94,14 @@ clear_no_speech_state() {
   rm -f "$SATELLITE_NO_SPEECH_STATE_FILE"
 }
 
+clear_stt_started_state() {
+  rm -f "$SATELLITE_STT_STARTED_STATE_FILE"
+}
+
+clear_watchdog_state() {
+  rm -f "$SATELLITE_WATCHDOG_STATE_FILE"
+}
+
 clear_transcript_timeout_state() {
   rm -f "$SATELLITE_TRANSCRIPT_TIMEOUT_STATE_FILE"
 }
@@ -107,6 +116,28 @@ import time
 
 print(int(time.time() * 1000))
 PY
+}
+
+mark_stt_started() {
+  mkdir -p "$(dirname "$SATELLITE_STT_STARTED_STATE_FILE")"
+  current_time_millis > "$SATELLITE_STT_STARTED_STATE_FILE"
+}
+
+stt_started_after_detection() {
+  local detection_ms="$1"
+
+  if [[ ! -f "$SATELLITE_STT_STARTED_STATE_FILE" ]]; then
+    return 1
+  fi
+
+  local stt_started_ms
+  stt_started_ms="$(cat "$SATELLITE_STT_STARTED_STATE_FILE" 2>/dev/null || true)"
+  if ! [[ "$stt_started_ms" =~ ^[0-9]+$ ]]; then
+    clear_stt_started_state
+    return 1
+  fi
+
+  (( stt_started_ms >= detection_ms ))
 }
 
 epoch_to_millis() {
@@ -202,8 +233,9 @@ start_no_speech_timer() {
   fi
 
   mkdir -p "$(dirname "$SATELLITE_NO_SPEECH_STATE_FILE")"
-  local token
-  token="$(date +%s.%N)-$$"
+  local detection_ms token
+  detection_ms="$(current_time_millis)"
+  token="${detection_ms}-$$"
   printf '%s\n' "$token" > "$SATELLITE_NO_SPEECH_STATE_FILE"
 
   (
@@ -215,6 +247,11 @@ start_no_speech_timer() {
     local current_token
     current_token="$(cat "$SATELLITE_NO_SPEECH_STATE_FILE" 2>/dev/null || true)"
     if [[ "$current_token" != "$token" ]]; then
+      exit 0
+    fi
+
+    if stt_started_after_detection "$detection_ms"; then
+      rm -f "$SATELLITE_NO_SPEECH_STATE_FILE"
       exit 0
     fi
 
@@ -320,8 +357,10 @@ case "$EVENT_NAME" in
     if restart_if_detection_is_in_post_transcript_cooldown; then
       exit 0
     fi
-    record_assist_detection || true
+    # Start the timer before slower bookkeeping so stt_start cannot race ahead
+    # and leave a stale no-speech restart armed after a successful command.
     start_no_speech_timer
+    record_assist_detection || true
     ;;
   streaming_start)
     clear_transcript_timeout_state
@@ -331,27 +370,35 @@ case "$EVENT_NAME" in
     fi
     ;;
   stt_start)
+    # Once STT starts, the wake-to-stream handoff succeeded. Clear the
+    # no-speech timer so it cannot restart the satellite while Whisper is
+    # still transcribing the user's command.
+    mark_stt_started
     clear_no_speech_state
     clear_transcript_timeout_state
     ;;
   transcript)
     clear_no_speech_state
+    clear_stt_started_state
     clear_transcript_timeout_state
     mark_post_transcript_cooldown
     ;;
   streaming_stop|error)
     clear_no_speech_state
+    clear_stt_started_state
     clear_transcript_timeout_state
     ;;
   stt_stop)
+    # STT has already stopped streaming microphone audio. Do not let the
+    # streaming watchdog kill the satellite while Whisper is still decoding and
+    # trying to deliver the transcript.
+    clear_watchdog_state
     start_transcript_timeout_timer
     ;;
 esac
 
 case "$EVENT_NAME" in
   streaming_stop|transcript|error)
-    if [[ "${SATELLITE_STREAMING_TIMEOUT_SECONDS}" != "0" ]]; then
-      rm -f "$SATELLITE_WATCHDOG_STATE_FILE"
-    fi
+    clear_watchdog_state
     ;;
 esac

@@ -35,40 +35,43 @@ For hands-free use with an English-speaking user:
 
 - `wyoming-satellite` on the Raspberry Pi host
 - `openWakeWord` for the wake word
-- `Whisper` for flexible English transcription
+- `Speech-to-Phrase` for command-focused local transcription
+- `Whisper` only as an opt-in fallback for open-ended transcription tests
 - `Piper` for local English text-to-speech
 
 The provided `compose.yaml` now starts:
 
 - `wyoming-openwakeword` on port `10400`
-- `wyoming-whisper` on port `10300`
+- `wyoming-speech-to-phrase` on port `10300`
 - `wyoming-piper` on port `10200`
+
+Whisper remains available behind the `whisper` Compose profile on host port
+`10301`, but it is no longer the normal STT path for the Assist pipeline.
 
 Default language/voice settings are:
 
-- Whisper language: `en`
-- Whisper model: `base-int8`
-- Whisper beam size: `3`
-- Whisper CPU threads: `4`
-- Whisper initial prompt: conservative home-automation guidance that tells the model to prefer no text over guessing and keeps only a short list of common room/studio commands for context
-- Whisper VAD filter: disabled by default in this project because low capture
-  levels on the ReSpeaker were causing full commands to be discarded as silence
+- STT engine: `Speech-to-Phrase`
+- Speech-to-Phrase custom sentences: `/home/lucas/homeassistant-bootstrap/custom_sentences`
+- Speech-to-Phrase Home Assistant token/websocket: copied from the bridge `.env`
+  by `configure_voice_services_env.sh` during deploy
+- Whisper fallback language/model: `en` / `base-int8`
 - Piper voice: `en_US-lessac-medium`
 - Wake word: `hey_jarvis`
-- openWakeWord threshold: `0.15` to favor first-try activations on this ReSpeaker setup,
+- openWakeWord threshold: `0.18` to reduce false wake/no-speech loops on this ReSpeaker setup,
   especially after long idle periods where the first wake was sometimes missed at `0.17`
 - openWakeWord trigger level: `1`
 - openWakeWord refractory: `8.0` seconds
 - Wake refractory: `8` seconds on the satellite side
-- Microphone auto gain: `15`
-- Microphone noise suppression: `0`
-- Microphone volume multiplier: `4.0`
+- Microphone auto gain: `5`
+- Microphone noise suppression: `2`
+- Microphone volume multiplier: `1.0`
 - Microphone channel index: auto-select from the stereo capture stream
 - Microphone mute after wake beep: `0.0` seconds so the command start is not clipped
-- Streaming watchdog timeout: `8` seconds
-- No-speech restart timeout: `7` seconds so the first spoken words are less likely to be missed
-- Transcript timeout: `12` seconds so Whisper has enough time to finish short commands before the watchdog forces a restart
-- Post-transcript self-trigger restart window: `2` seconds so we only reset on the immediate false second wake, not on a real follow-up request a few seconds later
+- Streaming watchdog timeout: `20` seconds so slow but valid local STT turns are not cut off
+- No-speech restart timeout: `0` seconds, disabled; the streaming watchdog handles true hangs without restart churn
+- Transcript timeout: `0` seconds, disabled by default to avoid killing delayed transcripts
+- Satellite debug recording: disabled for normal use to avoid extra I/O and log noise
+- Post-transcript self-trigger restart window: `0` seconds, disabled by default; wake refractory handles immediate self-triggers without breaking wake-to-command correlation
 
 ## Important note about transcription quality
 
@@ -82,21 +85,14 @@ The official Home Assistant local voice stack supports Wyoming-based services su
 - Piper
 - openWakeWord
 
-For open-ended natural language, Speech-to-Phrase is usually not the right fit as
-the first implementation step because it needs tighter Home Assistant coupling.
-For this repo, the safer first cut is:
+For this repo, the primary failure mode we observed was not bridge execution. The
+bridge executed correctly when it received text like "turn off the studio
+lights", but Whisper often emitted unrelated or malformed text such as invented
+commands. Speech-to-Phrase is a better fit for the current narrow voice surface:
+lights, Mac apps, monitor control, and named routines.
 
-- better audio capture from the ReSpeaker Lite
-- local wake word detection
-- English Whisper for transcription, using at least `base-int8` for better command accuracy
-- a slightly wider Whisper beam to better separate short `on/off` commands on Raspberry Pi CPU
-- a small, conservative initial prompt that helps with common commands without encouraging aggressive guessing
-- no Whisper VAD filtering by default because the ReSpeaker capture in this room
-  was quiet enough that VAD sometimes discarded the full spoken command
-- Piper for local speech output
-
-If `base-int8` is still inaccurate after the microphone is tuned, the next step
-should be a stronger English model, not a return to manual YAML editing.
+If we need open-ended natural language later, bring Whisper back intentionally as
+a secondary pipeline instead of putting it back on the main command path.
 
 The satellite wrapper also waits for the local wake service port to become
 reachable before it fully starts. That makes redeploys and reboots calmer when
@@ -111,6 +107,7 @@ The microphone is connected, so the practical setup order is:
 ```bash
 cd /home/lucas/ha-command-bridge/voice_services
 cp wyoming_services.env.example .env
+./configure_voice_services_env.sh
 docker compose up --build -d
 docker compose ps
 ```
@@ -145,7 +142,7 @@ After deployment, these checks should all look healthy:
 cd /home/lucas/ha-command-bridge/voice_services
 docker compose ps
 docker logs --tail 20 wyoming-openwakeword
-docker logs --tail 20 wyoming-whisper
+docker logs --tail 20 wyoming-speech-to-phrase
 docker logs --tail 20 wyoming-piper
 systemctl status wyoming-satellite.service --no-pager -l
 ss -ltn | egrep '10200|10300|10400|10700'
@@ -158,7 +155,7 @@ you keep the default time window and only ask for older history when needed:
 ./scripts/pi wake-debug
 ./scripts/pi voice-check
 ./scripts/pi logs satellite --since 2h
-./scripts/pi logs whisper --all
+./scripts/pi logs stt --all
 ./scripts/pi debug-clean --older-than 24h
 ```
 
@@ -222,57 +219,38 @@ satellite launch command again.
 
 ## No-speech timeout after wake word
 
-By default this repo uses a short no-speech restart:
+By default this repo does not force-restart the satellite on no-speech turns:
 
-Stable default:
+Default:
 
 ```bash
-SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7
+SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0
 ```
 
-This helps the satellite recover quickly after a false wake that never turns
-into real speech.
+This avoids restart churn when openWakeWord fires but no usable speech follows.
+For true stuck streaming states, keep the streaming watchdog enabled instead.
 
 ## Transcript timeout after STT stops
 
-If STT ends but Whisper is still decoding, the satellite should wait long
-enough for the transcript to come back before forcing a recovery.
+If STT ends but the recognizer is still decoding, the satellite can optionally wait for
+the transcript and then force a recovery if it never arrives.
 
-Stable default:
-
-```bash
-SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12
-```
-
-This gives short home-automation commands enough time to finish decoding on the
-Pi without leaving the satellite stuck for too long when Whisper actually hangs.
-
-If you want to disable that behavior entirely:
+Default:
 
 ```bash
 SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0
 ```
 
-With that enabled, the hook script starts a short timer on wake detection. If
-the user does not actually begin speaking before the timeout, the satellite
+Leave this disabled unless you have a confirmed stuck transcript path.
 
-## Local Whisper hotfix
+## Whisper fallback runtime
 
-This repo intentionally builds the `whisper` service from
-[`voice_services/whisper_patch`](./whisper_patch) instead of using the upstream
-image directly.
+This repo keeps the local `whisper_patch` image build for `wyoming-whisper`, but
+only as a fallback service.
 
-Reason: upstream `rhasspy/wyoming-faster-whisper` currently has an open issue
-where `AudioStop` can arrive without prior `AudioChunk`, causing an
-`AssertionError` in `dispatch_handler.py` and making later wake cycles
-unreliable. The local patch returns an empty transcript instead of crashing so
-the service stays healthy across repeated wake attempts.
-process is terminated and systemd brings it back immediately. If
-`HOME_ASSISTANT_URL` and `HOME_ASSISTANT_TOKEN` are available through the
-project `.env`, the hook also nudges `assist_satellite.respeaker_lite` back to
-`idle` by calling `assist_satellite.announce` with an empty message. This keeps
-the Home Assistant entity state closer to the real satellite state during empty
-wake-ups.
+That patch keeps the upstream runtime, but replaces the event handler with a
+small hotfix for the known `AudioStop`/`AssertionError` failure mode that can
+drop whole wake cycles before any transcript reaches the bridge.
 
 ## ReSpeaker Lite RGB note
 
@@ -288,7 +266,7 @@ satellite event hooks to it.
 If the satellite ever gets stuck in `listening` after a wake word, enable the
 watchdog that restarts it when streaming stays open too long.
 
-1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=8` as the normal project default
+1. Keep `SATELLITE_STREAMING_TIMEOUT_SECONDS=20` as the normal project default
 2. Install the helper scripts and both systemd units:
    - `satellite_watchdog_hook.sh`
    - `satellite_watchdog_check.sh`
@@ -302,10 +280,10 @@ sudo systemctl enable --now wyoming-satellite-watchdog.timer
 ```
 
 When you later need a more aggressive watchdog, lower
-`SATELLITE_STREAMING_TIMEOUT_SECONDS` below the default `8`.
+`SATELLITE_STREAMING_TIMEOUT_SECONDS` below the default `20`.
 The satellite wrapper will automatically set hook commands that create a state
-file when streaming starts and clear it on transcript, stop, or error. The
-watchdog timer checks that state file every 10 seconds and restarts
+file when streaming starts and clear it on `stt_stop`, transcript, stop, or
+error. The watchdog timer checks that state file every 10 seconds and restarts
 `wyoming-satellite.service` if the stream stays open longer than the configured
 timeout.
 

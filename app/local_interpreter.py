@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import re
 import unicodedata
 
@@ -22,23 +23,45 @@ RELATIVE_SCHEDULE_PATTERNS = (
 LIGHT_COLOR_VALUES: dict[str, list[int]] = {
     "red": [255, 0, 0],
     "rojo": [255, 0, 0],
+    "roja": [255, 0, 0],
+    "rojos": [255, 0, 0],
+    "rojas": [255, 0, 0],
     "green": [0, 255, 0],
     "verde": [0, 255, 0],
+    "verdes": [0, 255, 0],
     "blue": [0, 0, 255],
     "azul": [0, 0, 255],
+    "azules": [0, 0, 255],
     "yellow": [255, 255, 0],
     "amarillo": [255, 255, 0],
+    "amarilla": [255, 255, 0],
+    "amarillos": [255, 255, 0],
+    "amarillas": [255, 255, 0],
     "orange": [255, 128, 0],
     "naranja": [255, 128, 0],
+    "naranjas": [255, 128, 0],
     "purple": [128, 0, 255],
     "violeta": [128, 0, 255],
+    "violetas": [128, 0, 255],
     "morado": [128, 0, 255],
+    "morada": [128, 0, 255],
+    "morados": [128, 0, 255],
+    "moradas": [128, 0, 255],
     "pink": [255, 105, 180],
     "rosa": [255, 105, 180],
+    "rosas": [255, 105, 180],
+    "rosado": [255, 105, 180],
+    "rosada": [255, 105, 180],
+    "rosados": [255, 105, 180],
+    "rosadas": [255, 105, 180],
     "magenta": [255, 0, 255],
     "cyan": [0, 255, 255],
+    "cian": [0, 255, 255],
     "white": [255, 255, 255],
     "blanco": [255, 255, 255],
+    "blanca": [255, 255, 255],
+    "blancos": [255, 255, 255],
+    "blancas": [255, 255, 255],
 }
 
 LIGHT_TEMPERATURE_VALUES: dict[str, int] = {
@@ -78,6 +101,22 @@ BRIGHTNESS_KEYWORD_VALUES: tuple[tuple[re.Pattern[str], int], ...] = (
     (re.compile(r"\b(?:full|maximum|max)\s+(?:brightness|intensity)\b"), 100),
 )
 
+VOICE_COMMAND_REPAIR_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^tomb\s+of\b"), "turn off"),
+    (re.compile(r"^tour\s+of\b"), "turn off"),
+    (re.compile(r"^don\s+t\s+off\b"), "turn off"),
+    (re.compile(r"^dont\s+off\b"), "turn off"),
+    (re.compile(r"\bstony\b"), "studio"),
+    (re.compile(r"\btheir\s+womb\b"), "the room"),
+    (re.compile(r"\bthe\s+womb\b"), "the room"),
+    (
+        re.compile(
+            r"^open\s+(youtube|spotify|instagram|chatgpt|safari)\s+on\s+(?:the\s+)?(?:back|bank|map|market|max)$"
+        ),
+        r"open \1 on the mac",
+    ),
+)
+
 
 def _collapse_repeated_word_spans(text: str) -> str:
     words = text.split()
@@ -102,6 +141,13 @@ def _collapse_repeated_word_spans(text: str) -> str:
     return " ".join(words)
 
 
+def _apply_voice_command_repairs(text: str) -> str:
+    updated = text
+    for pattern, replacement in VOICE_COMMAND_REPAIR_PATTERNS:
+        updated = pattern.sub(replacement, updated)
+    return re.sub(r"\s+", " ", updated).strip()
+
+
 def _normalize(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text.lower())
     normalized = "".join(char for char in normalized if not unicodedata.combining(char))
@@ -119,6 +165,7 @@ def _normalize(text: str) -> str:
     for pattern in TRAILING_FILLER_PATTERNS:
         updated = pattern.sub("", updated).strip()
 
+    updated = _apply_voice_command_repairs(updated)
     updated = re.sub(r"\ball\s+of\s+(?:the\s+)?lights\b", "all lights", updated)
     updated = re.sub(r"\bthe\s+all\s+lights\b", "all lights", updated)
     # Whisper can occasionally produce contradictory split phrases such as
@@ -132,6 +179,69 @@ def _normalize(text: str) -> str:
     updated = re.sub(
         r"\b(turn|switch|power)\s+off\s+((?:\w+\s+){0,8}?)on\b",
         r"\1 on \2",
+        updated,
+    )
+    # A recurring Whisper confusion on this setup is "don't burn the studio
+    # lights" for "turn on the studio lights". Limit the repair to requests
+    # that start with that exact light-control shape so we do not broaden it
+    # into unrelated phrases.
+    updated = re.sub(
+        r"^don\s+t\s+burn\s+((?:the\s+)?(?:\w+\s+){0,3}?(?:light|lights|lamp|lamps))$",
+        r"turn on \1",
+        updated,
+    )
+    # Additional narrow repairs for recurring Whisper confusions observed in
+    # the voice logs for "turn on the studio lights".
+    updated = re.sub(r"\bstory\s+lights\b", "studio lights", updated)
+    updated = re.sub(r"\bstudio\s+lines\b", "studio lights", updated)
+    updated = re.sub(
+        r"^don\s+t\s+want\s+((?:the\s+)?(?:\w+\s+){0,3}?(?:light|lights|lamp|lamps))$",
+        r"turn on \1",
+        updated,
+    )
+    updated = re.sub(
+        r"^don\s+t\s+own\s+((?:the\s+)?(?:\w+\s+){0,3}?(?:light|lights|lamp|lamps))$",
+        r"turn on \1",
+        updated,
+    )
+    updated = re.sub(
+        r"^to\s+front\s+((?:the\s+)?(?:\w+\s+){0,3}?(?:light|lights|lamp|lamps))$",
+        r"turn on \1",
+        updated,
+    )
+    updated = re.sub(
+        r"^two\s+times\s+((?:the\s+)?(?:\w+\s+){0,3}?(?:light|lights|lamp|lamps))$",
+        r"turn on \1",
+        updated,
+    )
+    updated = re.sub(r"\byou\s+tube\b", "youtube", updated)
+    updated = re.sub(
+        r"^over\s+youtube\s+from\s+the\s+max$",
+        "open youtube on the mac",
+        updated,
+    )
+    updated = re.sub(
+        r"^go\s+with\s+youtube\s+on\s+(?:the\s+)?mac$",
+        "open youtube on the mac",
+        updated,
+    )
+    updated = re.sub(
+        r"^open\s+(instagram|youtube|spotify|chatgpt|safari)\s+on\s+(?:the\s+)?market$",
+        r"open \1 on the mac",
+        updated,
+    )
+    updated = re.sub(
+        r"^(?:open|launch)\s+june(?:\s+on\s+(?:the\s+)?mac)?$",
+        lambda match: "open youtube on the mac" if "mac" in match.group(0) else "open youtube",
+        updated,
+    )
+    # Prompt-shaped Whisper leakage can append brightness tails to a clear
+    # power-off request, e.g. "turn off the studio lights to 50 percent
+    # brightness". When the leading intent is explicit turn_off, prefer the
+    # off command over the contradictory brightness modifier.
+    updated = re.sub(
+        r"^(?:turn|switch|power)\s+off\s+(.+?)\s+(?:to|at)\s+\d+\s+percent(?:\s+brightness)?$",
+        r"turn off \1",
         updated,
     )
     # Whisper can occasionally duplicate the spoken command back-to-back,
@@ -155,6 +265,19 @@ def _last_phrase_position(text: str, phrase: str) -> int:
     for match in re.finditer(rf"\b{escaped}\b", text):
         last_position = match.start()
     return last_position
+
+
+def _token_sort_key(text: str) -> str:
+    return " ".join(sorted(text.split()))
+
+
+def _similarity_score(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+
+    direct = SequenceMatcher(None, left, right).ratio()
+    token_sorted = SequenceMatcher(None, _token_sort_key(left), _token_sort_key(right)).ratio()
+    return max(direct, token_sorted)
 
 
 class LocalInterpreter:
@@ -294,6 +417,10 @@ class LocalInterpreter:
             if action in {"turn_on", "turn_off"} and self._looks_like_area_specific_light_request(normalized):
                 raise ValidationError("The requested lights are unavailable or not configured locally.")
 
+        fuzzy_plan = self._fuzzy_closed_command_plan(normalized, target_capabilities, schedule=schedule)
+        if fuzzy_plan is not None:
+            return fuzzy_plan
+
         raise ValidationError(
             "No local rule matched the request. Add a clearer phrase or configure an Anthropic API key."
         )
@@ -391,6 +518,25 @@ class LocalInterpreter:
                 best_action = action
                 best_position = action_last_position
 
+        bare_light_state_patterns = (
+            (
+                "turn_off",
+                re.compile(
+                    r"^(?!.*\b(?:are|is|status|state)\b)(?:the\s+)?(?:\w+\s+){0,5}(?:light|lights|lamp|lamps)\s+off$"
+                ),
+            ),
+            (
+                "turn_on",
+                re.compile(
+                    r"^(?!.*\b(?:are|is|status|state)\b)(?:the\s+)?(?:\w+\s+){0,5}(?:light|lights|lamp|lamps)\s+on$"
+                ),
+            ),
+        )
+        for action, pattern in bare_light_state_patterns:
+            if pattern.search(text) and best_position < 0:
+                best_action = action
+                best_position = 0
+
         return best_action
 
     def _looks_like_recurring_routine_request(self, text: str) -> bool:
@@ -431,9 +577,21 @@ class LocalInterpreter:
 
     def _contains_explicit_color_request(self, text: str, color_name: str) -> bool:
         color = re.escape(color_name)
+        article = r"(?:the\s+|el\s+|la\s+|los\s+|las\s+)?"
+        color_tail = rf"(?:to|a|en|de|color|colour)?\s*{article}{color}\b"
         return bool(
-            re.search(rf"\b(?:to|a|color|colour|make|set|cambia|cambie|cambiar|pon|pone|poner)\s+(?:the\s+|el\s+|la\s+)?{color}\b", text)
-            or re.search(rf"\bturn\s+(?:the\s+)?[\w\s]*\s+{color}\b", text)
+            re.search(
+                rf"\b(?:to|a|en|color|colour|make|set|change|cambia|cambie|cambiar|pon|pone|poner)\s+{article}{color}\b",
+                text,
+            )
+            or re.search(
+                rf"\b(?:make|set|change|turn|cambia|cambie|cambiar|pon|pone|poner)\b(?:\s+\w+){{0,10}}\s+{color_tail}",
+                text,
+            )
+            or re.search(
+                rf"\b(?:lights?|luces|luz)\b(?:\s+\w+){{0,8}}\s+{color_tail}",
+                text,
+            )
         )
 
     def _looks_like_all_home_lights(self, text: str) -> bool:
@@ -717,6 +875,95 @@ class LocalInterpreter:
                 best_score = candidate_score
 
         return best_target
+
+    def _fuzzy_closed_command_plan(
+        self,
+        text: str,
+        target_capabilities: dict[str, TargetCapabilities],
+        *,
+        schedule: ScheduleSpec | None,
+    ) -> ActionPlan | None:
+        candidates = self._fuzzy_closed_command_candidates(target_capabilities)
+        if not candidates:
+            return None
+
+        scored: list[tuple[float, str, str, str]] = []
+        for phrase, action, target in candidates:
+            score = _similarity_score(text, phrase)
+            if score >= self._minimum_fuzzy_score(action, target):
+                scored.append((score, phrase, action, target))
+
+        if not scored:
+            return None
+
+        scored.sort(reverse=True)
+        best_score, best_phrase, best_action, best_target = scored[0]
+        for next_score, _, next_action, next_target in scored[1:]:
+            if next_action == best_action and next_target == best_target:
+                continue
+            if best_score - next_score < 0.045:
+                return None
+            break
+
+        return self._single_action_plan(
+            action=best_action,
+            target=best_target,
+            rationale=f"Matched fuzzy closed-command rule: '{best_phrase}' ({best_score:.2f}).",
+            schedule=schedule,
+        )
+
+    def _minimum_fuzzy_score(self, action: str, target: str) -> float:
+        if target.startswith("script."):
+            return 0.84
+        if action in {"turn_on", "turn_off"}:
+            return 0.83
+        return 0.88
+
+    def _fuzzy_closed_command_candidates(
+        self,
+        target_capabilities: dict[str, TargetCapabilities],
+    ) -> list[tuple[str, str, str]]:
+        candidates: set[tuple[str, str, str]] = set()
+        for target_id, capabilities in target_capabilities.items():
+            aliases = sorted(
+                {
+                    _normalize(keyword).strip()
+                    for keyword in matching_keywords_for_target(
+                        target_id,
+                        capabilities.aliases,
+                        kind=capabilities.kind,
+                    )
+                    if keyword
+                }
+            )
+            aliases = [alias for alias in aliases if alias]
+
+            if capabilities.kind == "script" and "run_script" in capabilities.actions:
+                for alias in aliases:
+                    candidates.add((alias, "run_script", target_id))
+                continue
+
+            if capabilities.domain != "light":
+                continue
+
+            for alias in aliases:
+                expanded_aliases = {alias}
+                if not re.search(r"\b(?:light|lights|lamp|lamps|luz|luces)\b", alias):
+                    expanded_aliases.add(f"{alias} lights")
+
+                if "turn_on" in capabilities.actions:
+                    for expanded_alias in expanded_aliases:
+                        candidates.add((f"turn on {expanded_alias}", "turn_on", target_id))
+                        candidates.add((f"turn {expanded_alias} on", "turn_on", target_id))
+                        candidates.add((f"{expanded_alias} on", "turn_on", target_id))
+
+                if "turn_off" in capabilities.actions:
+                    for expanded_alias in expanded_aliases:
+                        candidates.add((f"turn off {expanded_alias}", "turn_off", target_id))
+                        candidates.add((f"turn {expanded_alias} off", "turn_off", target_id))
+                        candidates.add((f"{expanded_alias} off", "turn_off", target_id))
+
+        return sorted(candidates)
 
     def _is_target_available(
         self,

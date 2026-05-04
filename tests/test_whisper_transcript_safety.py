@@ -35,6 +35,38 @@ class WhisperTranscriptSafetyTests(unittest.TestCase):
             text,
         )
 
+    def test_sanitize_transcript_drops_known_hallucinated_filler(self):
+        text = "If you have any questions, please let us know in the comments below if you have any questions."
+
+        self.assertEqual(
+            sanitize_transcript_text(text, max_chars=500),
+            "",
+        )
+
+    def test_sanitize_transcript_drops_known_nonsense_phrase(self):
+        text = "We are in the past, but we are not in the past."
+
+        self.assertEqual(
+            sanitize_transcript_text(text, max_chars=500),
+            "",
+        )
+
+    def test_sanitize_transcript_drops_known_hallucinated_intro(self):
+        text = "Hello, ladies and gentlemen."
+
+        self.assertEqual(
+            sanitize_transcript_text(text, max_chars=500),
+            "",
+        )
+
+    def test_sanitize_transcript_drops_prompt_leakage(self):
+        text = "Enciende las luces del estudio. Enciende las luces de room. Abre youtube en la mac."
+
+        self.assertEqual(
+            sanitize_transcript_text(text, max_chars=500),
+            "",
+        )
+
     def test_sanitize_transcript_trims_remaining_long_text(self):
         text = " ".join(f"token{i}" for i in range(250))
 

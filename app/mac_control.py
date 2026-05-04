@@ -18,6 +18,7 @@ class MacControlService:
     _TARGET_COMMANDS = {
         "script.mac_open_youtube": "open_youtube",
         "script.mac_open_spotify": "open_spotify",
+        "script.mac_open_instagram": "open_instagram",
         "script.mac_open_chatgpt": "open_chatgpt",
         "script.mac_open_safari": "open_safari",
     }

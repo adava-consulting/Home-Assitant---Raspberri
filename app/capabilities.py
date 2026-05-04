@@ -436,12 +436,6 @@ def should_expand_group_action(target_id: str, action: str, parameters: dict[str
     if action not in expandable_actions:
         return False
 
-    if domain == "light":
-        if action in {"turn_on", "turn_off"}:
-            return True
-        complex_light_keys = {"brightness", "brightness_pct", "rgb_color", "color_temp_kelvin"}
-        return bool(complex_light_keys & set(parameters))
-
     return True
 
 

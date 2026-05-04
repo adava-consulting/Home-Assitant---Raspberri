@@ -95,6 +95,23 @@ duration_to_find_minutes() {
   printf '%s' "$minutes"
 }
 
+duration_to_seconds() {
+  local value="$1"
+  if ! [[ "$value" =~ ^([0-9]+)([smhd])$ ]]; then
+    echo "Unsupported duration '${value}'. Use values like 30m, 2h, or 1d." >&2
+    exit 1
+  fi
+
+  local amount="${BASH_REMATCH[1]}"
+  local unit="${BASH_REMATCH[2]}"
+  case "$unit" in
+    s) printf '%s' "$amount" ;;
+    m) printf '%s' "$(( amount * 60 ))" ;;
+    h) printf '%s' "$(( amount * 3600 ))" ;;
+    d) printf '%s' "$(( amount * 86400 ))" ;;
+  esac
+}
+
 parse_recent_window_args() {
   RECENT_WINDOW_MODE="since"
   RECENT_WINDOW_SINCE="$PI_LOG_SINCE_DEFAULT"
@@ -114,6 +131,20 @@ parse_recent_window_args() {
         RECENT_WINDOW_SINCE="$2"
         RECENT_WINDOW_MODE="since"
         shift 2
+        ;;
+      --since=*)
+        local since_value="${1#--since=}"
+        validate_duration_token "$since_value"
+        RECENT_WINDOW_SINCE="$since_value"
+        RECENT_WINDOW_MODE="since"
+        shift
+        ;;
+      --since[0-9]*[smhd])
+        local since_value="${1#--since}"
+        validate_duration_token "$since_value"
+        RECENT_WINDOW_SINCE="$since_value"
+        RECENT_WINDOW_MODE="since"
+        shift
         ;;
       *)
         echo "Unexpected argument: $1" >&2
@@ -160,25 +191,36 @@ wake_debug_summary() {
   local recent_window_desc="$1"
   local journal_cmd
   local openwakeword_logs_cmd
+  local speech_to_phrase_logs_cmd
   local whisper_logs_cmd
+  local recent_window_seconds="all"
   local summary_cmd
 
   journal_cmd="$(journalctl_recent_command 'wyoming-satellite.service' 200)"
   openwakeword_logs_cmd="$(docker_logs_recent_command 'wyoming-openwakeword' 120)"
+  speech_to_phrase_logs_cmd="$(docker_logs_recent_command 'wyoming-speech-to-phrase' 120)"
   whisper_logs_cmd="$(docker_logs_recent_command 'wyoming-whisper' 120)"
+  if [[ "${RECENT_WINDOW_MODE}" == "since" ]]; then
+    recent_window_seconds="$(duration_to_seconds "${RECENT_WINDOW_SINCE}")"
+  fi
 
   summary_cmd="$(cat <<EOF
 tmp_dir=\$(mktemp -d)
 cleanup() { rm -rf "\$tmp_dir"; }
 trap cleanup EXIT
+date -Iseconds >"\$tmp_dir/pi_now.txt" 2>&1 || true
+date -u -Iseconds >"\$tmp_dir/pi_now_utc.txt" 2>&1 || true
+timedatectl show -p Timezone --value >"\$tmp_dir/pi_timezone.txt" 2>&1 || true
 ${journal_cmd} >"\$tmp_dir/satellite.log" 2>&1 || true
 ${openwakeword_logs_cmd} >"\$tmp_dir/openwakeword.log" 2>&1 || true
+${speech_to_phrase_logs_cmd} >"\$tmp_dir/speech-to-phrase.log" 2>&1 || true
 ${whisper_logs_cmd} >"\$tmp_dir/whisper.log" 2>&1 || true
 curl -fsS 'http://127.0.0.1:8000/activity?limit=40' >"\$tmp_dir/activity.json" 2>/dev/null || printf '%s\n' '{"count":0,"entries":[]}' >"\$tmp_dir/activity.json"
 curl -fsS 'http://127.0.0.1:8000/assist-guard' >"\$tmp_dir/assist_guard.json" 2>/dev/null || printf '%s\n' '{"enabled":false,"state":{}}' >"\$tmp_dir/assist_guard.json"
-python3 - "\$tmp_dir" "${recent_window_desc}" <<'PY'
+python3 - "\$tmp_dir" "${recent_window_desc}" "${recent_window_seconds}" <<'PY'
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -187,6 +229,8 @@ import time
 
 root = Path(sys.argv[1])
 recent_window_desc = sys.argv[2]
+recent_window_seconds_arg = sys.argv[3]
+recent_window_seconds = None if recent_window_seconds_arg == "all" else int(recent_window_seconds_arg)
 
 
 def read_text(name: str) -> str:
@@ -204,6 +248,10 @@ def read_json(name: str, fallback: dict) -> dict:
     except Exception:
         return dict(fallback)
     return payload if isinstance(payload, dict) else dict(fallback)
+
+
+def read_one_line(name: str) -> str:
+    return " ".join(read_text(name).split())
 
 
 def count(pattern: str, text: str, *, flags: int = 0) -> int:
@@ -228,10 +276,21 @@ def age_seconds(timestamp_ms: object, *, now_ms: int) -> str:
     return f"{age_ms / 1000:.1f}"
 
 
+def parse_occurred_at(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 satellite_log = read_text("satellite.log")
 openwakeword_log = read_text("openwakeword.log")
+speech_to_phrase_log = read_text("speech-to-phrase.log")
 whisper_log = read_text("whisper.log")
-combined_logs = "\n".join([satellite_log, openwakeword_log, whisper_log])
+combined_logs = "\n".join([satellite_log, openwakeword_log, speech_to_phrase_log, whisper_log])
 
 activity_payload = read_json("activity.json", {"count": 0, "entries": []})
 assist_guard_payload = read_json("assist_guard.json", {"enabled": False, "state": {}})
@@ -239,6 +298,17 @@ assist_guard_payload = read_json("assist_guard.json", {"enabled": False, "state"
 activity_entries = activity_payload.get("entries")
 if not isinstance(activity_entries, list):
     activity_entries = []
+
+if recent_window_seconds is not None:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=recent_window_seconds)
+    filtered_entries = []
+    for entry in activity_entries:
+        if not isinstance(entry, dict):
+            continue
+        occurred_at = parse_occurred_at(entry.get("occurred_at"))
+        if occurred_at is None or occurred_at >= cutoff:
+            filtered_entries.append(entry)
+    activity_entries = filtered_entries
 
 assist_entries = [
     entry
@@ -270,6 +340,16 @@ satellite_errors = count(r"Event\(type=.error", satellite_log)
 no_speech_restarts = count(r"No speech detected", satellite_log)
 transcript_timeouts = count(r"Transcript not received", satellite_log)
 stt_no_text = count(r"stt-no-text-recognized", combined_logs)
+wake_beeps = count(r"Playing raw data", satellite_log)
+whisper_empty_transcripts = count(
+    r"INFO:wyoming_faster_whisper\.dispatch_handler:\s*$",
+    whisper_log,
+    flags=re.MULTILINE,
+)
+whisper_suspicious_transcripts = count(r"Sanitized suspicious transcript", whisper_log)
+whisper_delivery_failures = count(r"Transcript delivery failed because the client disconnected", whisper_log)
+speech_to_phrase_training = count(r"training|retrain", speech_to_phrase_log, flags=re.IGNORECASE)
+speech_to_phrase_errors = count(r"error|traceback|failed", speech_to_phrase_log, flags=re.IGNORECASE)
 bridge_assist_entries = len(assist_entries)
 bridge_assist_executed = sum(1 for entry in assist_entries if entry.get("status") == "executed")
 bridge_assist_failed = len(assist_failed_entries)
@@ -277,8 +357,15 @@ assist_guard_failures = len(guard_failures)
 
 print(f"== wake-debug summary ({recent_window_desc}) ==")
 print(
+    "time:"
+    f" pi_now={read_one_line('pi_now.txt') or 'unknown'}"
+    f" pi_timezone={read_one_line('pi_timezone.txt') or 'unknown'}"
+    f" pi_now_utc={read_one_line('pi_now_utc.txt') or 'unknown'}"
+)
+print(
     "wake_counts:"
     f" detections={detections}"
+    f" wake_beeps={wake_beeps}"
     f" transcripts={transcripts}"
     f" synthesize={syntheses}"
     f" satellite_errors={satellite_errors}"
@@ -288,6 +375,11 @@ print(
     f" no_speech_restarts={no_speech_restarts}"
     f" transcript_timeouts={transcript_timeouts}"
     f" stt_no_text={stt_no_text}"
+    f" whisper_empty={whisper_empty_transcripts}"
+    f" whisper_suspicious={whisper_suspicious_transcripts}"
+    f" whisper_delivery_failed={whisper_delivery_failures}"
+    f" speech_to_phrase_training={speech_to_phrase_training}"
+    f" speech_to_phrase_errors={speech_to_phrase_errors}"
 )
 print(
     "bridge_counts:"
@@ -316,12 +408,38 @@ if last_assist_error:
 print()
 print("Likely breakpoint:")
 if detections == 0:
-    print(
-        "- No wake detections were observed in the selected window. "
-        "If the failed attempt is inside this window, focus on openWakeWord sensitivity or the mic path."
-    )
+    if wake_beeps > 0:
+        print(
+            "- Wake debug detection lines were not logged, but wake beep playback was observed. "
+            "This usually means satellite debug logging is off; treat the beep count as wake evidence."
+        )
+    else:
+        print(
+            "- No wake detections were observed in the selected window. "
+            "If the failed attempt is inside this window, focus on openWakeWord sensitivity or the mic path."
+        )
 elif transcripts == 0:
-    if no_speech_restarts > 0:
+    if speech_to_phrase_errors > 0:
+        print(
+            "- Speech-to-Phrase logged errors. Check Home Assistant token/websocket access "
+            "or custom sentence training before tuning wake/audio."
+        )
+    elif whisper_delivery_failures > 0:
+        print(
+            "- Whisper produced or attempted to deliver a transcript, but the satellite client "
+            "disconnected first. Focus on satellite restarts/watchdog timing or Pi throttling."
+        )
+    elif whisper_empty_transcripts > 0:
+        print(
+            "- Wake was detected, and Whisper returned an empty transcript. "
+            "That is expected for wake-only tests and should not execute a command."
+        )
+    elif whisper_suspicious_transcripts > 0:
+        print(
+            "- Wake was detected, but Whisper produced a suspicious non-command transcript. "
+            "The bridge/guard rejected it instead of executing a device action."
+        )
+    elif no_speech_restarts > 0:
         print(
             "- Wake was detected, but the satellite restarted for no-speech before any transcript arrived. "
             "This points to the wake-to-stream handoff or the command start being missed."
@@ -363,6 +481,330 @@ EOF
   run_ssh_expect_with_sudo "$summary_cmd"
 }
 
+latency_check_summary() {
+  local recent_window_desc="$1"
+  local journal_cmd
+  local recent_window_seconds="all"
+  local summary_cmd
+
+  journal_cmd="$(journalctl_recent_command 'wyoming-satellite.service' 240)"
+  if [[ "${RECENT_WINDOW_MODE}" == "since" ]]; then
+    recent_window_seconds="$(duration_to_seconds "${RECENT_WINDOW_SINCE}")"
+  fi
+
+  summary_cmd="$(cat <<EOF
+tmp_dir=\$(mktemp -d)
+cleanup() { rm -rf "\$tmp_dir"; }
+trap cleanup EXIT
+date -Iseconds >"\$tmp_dir/pi_now.txt" 2>&1 || true
+timedatectl show -p Timezone --value >"\$tmp_dir/pi_timezone.txt" 2>&1 || true
+${journal_cmd} >"\$tmp_dir/satellite.log" 2>&1 || true
+curl -fsS 'http://127.0.0.1:8000/activity?limit=80' >"\$tmp_dir/activity.json" 2>/dev/null || printf '%s\n' '{"count":0,"entries":[]}' >"\$tmp_dir/activity.json"
+python3 - "\$tmp_dir" "${recent_window_desc}" "${recent_window_seconds}" <<'PY'
+from __future__ import annotations
+
+import ast
+from datetime import UTC, datetime, timedelta
+import json
+from pathlib import Path
+import re
+import sys
+from zoneinfo import ZoneInfo
+
+root = Path(sys.argv[1])
+recent_window_desc = sys.argv[2]
+recent_window_seconds_arg = sys.argv[3]
+recent_window_seconds = None if recent_window_seconds_arg == "all" else int(recent_window_seconds_arg)
+
+
+def read_text(name: str) -> str:
+    path = root / name
+    try:
+        return path.read_text("utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+
+
+def read_json(name: str, fallback: dict) -> dict:
+    path = root / name
+    try:
+        payload = json.loads(path.read_text("utf-8", errors="replace"))
+    except Exception:
+        return dict(fallback)
+    return payload if isinstance(payload, dict) else dict(fallback)
+
+
+def read_one_line(name: str) -> str:
+    return " ".join(read_text(name).split())
+
+
+def parse_occurred_at(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def normalize_text(value: object) -> str:
+    compact = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower())
+    return " ".join(compact.split())
+
+
+def format_ms(value: object) -> str:
+    if value in (None, ""):
+        return "none"
+    try:
+        return str(int(round(float(value))))
+    except (TypeError, ValueError):
+        return "none"
+
+
+def stats(values: list[int]) -> str:
+    if not values:
+        return "count=0"
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    median = ordered[middle] if len(ordered) % 2 == 1 else round((ordered[middle - 1] + ordered[middle]) / 2)
+    return f"count={len(ordered)} min={ordered[0]} median={median} max={ordered[-1]}"
+
+
+def truncate(value: object, limit: int = 72) -> str:
+    compact = " ".join(str(value or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3] + "..."
+
+
+def detail_value(details: dict[str, object], key: str, limit: int = 96) -> str:
+    value = details.get(key)
+    if value in (None, ""):
+        return "none"
+    return truncate(value, limit=limit)
+
+
+def parse_journal_timestamp(raw_value: str, *, year: int, tz_name: str) -> datetime | None:
+    try:
+        parsed = datetime.strptime(f"{year} {raw_value}", "%Y %b %d %H:%M:%S")
+        return parsed.replace(tzinfo=journal_tz)
+    except Exception:
+        return None
+
+
+satellite_log = read_text("satellite.log")
+activity_payload = read_json("activity.json", {"count": 0, "entries": []})
+activity_entries = activity_payload.get("entries")
+if not isinstance(activity_entries, list):
+    activity_entries = []
+
+pi_now = parse_occurred_at(read_one_line("pi_now.txt"))
+tz_name = read_one_line("pi_timezone.txt") or "UTC"
+try:
+    journal_tz = ZoneInfo(tz_name)
+except Exception:
+    journal_tz = UTC
+current_year = (pi_now or datetime.now(UTC)).astimezone(journal_tz).year
+cutoff = None
+if recent_window_seconds is not None:
+    cutoff = (pi_now or datetime.now(UTC)) - timedelta(seconds=recent_window_seconds)
+
+detections: list[dict[str, object]] = []
+transcripts: list[dict[str, object]] = []
+detection_re = re.compile(r"^(?P<ts>[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}).*Detection\(")
+transcript_re = re.compile(
+    r"^(?P<ts>[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}).*Event\(type='transcript', data=\{'text': (?P<text>.+?)\}, payload=None\)"
+)
+
+for line in satellite_log.splitlines():
+    detection_match = detection_re.search(line)
+    if detection_match:
+        detected_at = parse_journal_timestamp(
+            detection_match.group("ts"),
+            year=current_year,
+            tz_name=tz_name,
+        )
+        if detected_at is not None and (cutoff is None or detected_at >= cutoff):
+            detections.append({"at": detected_at, "matched": False})
+        continue
+
+    transcript_match = transcript_re.search(line)
+    if transcript_match:
+        transcript_at = parse_journal_timestamp(
+            transcript_match.group("ts"),
+            year=current_year,
+            tz_name=tz_name,
+        )
+        if transcript_at is None or (cutoff is not None and transcript_at < cutoff):
+            continue
+        try:
+            transcript_text = ast.literal_eval(transcript_match.group("text"))
+        except Exception:
+            transcript_text = transcript_match.group("text")
+        transcripts.append(
+            {
+                "at": transcript_at,
+                "text": str(transcript_text),
+                "norm": normalize_text(transcript_text),
+                "matched": False,
+            }
+        )
+
+assist_entries: list[dict[str, object]] = []
+for entry in activity_entries:
+    if not isinstance(entry, dict):
+        continue
+    if not str(entry.get("source", "")).startswith("assist_"):
+        continue
+    occurred_at = parse_occurred_at(entry.get("occurred_at"))
+    if cutoff is not None and occurred_at is not None and occurred_at < cutoff:
+        continue
+    assist_entries.append(entry)
+
+assist_entries.sort(key=lambda entry: parse_occurred_at(entry.get("occurred_at")) or datetime.min.replace(tzinfo=UTC))
+
+
+def mark_detection_match(detection_at: datetime | None) -> None:
+    if detection_at is None:
+        return
+    for detection in detections:
+        if detection["matched"]:
+            continue
+        if abs((detection["at"] - detection_at).total_seconds()) <= 2:
+            detection["matched"] = True
+            return
+
+
+def match_transcript(entry_text: str, occurred_at: datetime | None, detection_at: datetime | None) -> dict[str, object] | None:
+    normalized = normalize_text(entry_text)
+    if not normalized or occurred_at is None:
+        return None
+
+    for transcript in transcripts:
+        if transcript["matched"] or transcript["norm"] != normalized:
+            continue
+        transcript_at = transcript["at"]
+        if detection_at is not None and transcript_at < detection_at - timedelta(seconds=2):
+            continue
+        if transcript_at > occurred_at + timedelta(seconds=2):
+            continue
+        if (occurred_at - transcript_at).total_seconds() > 90:
+            continue
+        transcript["matched"] = True
+        return transcript
+    return None
+
+
+executed_count = sum(1 for entry in assist_entries if entry.get("status") == "executed")
+failed_count = sum(1 for entry in assist_entries if entry.get("status") == "failed")
+wake_to_result_values: list[int] = []
+bridge_total_values: list[int] = []
+plan_apply_values: list[int] = []
+attempt_lines: list[str] = []
+
+for entry in assist_entries[-8:]:
+    occurred_at = parse_occurred_at(entry.get("occurred_at"))
+    details = entry.get("details")
+    if not isinstance(details, dict):
+        details = {}
+
+    detection_at = parse_occurred_at(details.get("assist_guard_detection_at"))
+    transcript = match_transcript(str(entry.get("text", "")), occurred_at, detection_at)
+    transcript_at = transcript.get("at") if transcript is not None else None
+    mark_detection_match(detection_at)
+
+    bridge_total_ms = details.get("bridge_total_ms")
+    plan_apply_ms = details.get("plan_apply_ms")
+    wake_to_bridge_ms = details.get("assist_guard_detection_age_ms")
+
+    wake_to_result_ms = None
+    if detection_at is not None and occurred_at is not None:
+        wake_to_result_ms = round((occurred_at - detection_at).total_seconds() * 1000)
+    elif bridge_total_ms not in (None, "") and wake_to_bridge_ms not in (None, ""):
+        try:
+            wake_to_result_ms = int(round(float(bridge_total_ms) + float(wake_to_bridge_ms)))
+        except (TypeError, ValueError):
+            wake_to_result_ms = None
+
+    if bridge_total_ms not in (None, ""):
+        try:
+            bridge_total_values.append(int(round(float(bridge_total_ms))))
+        except (TypeError, ValueError):
+            pass
+    if plan_apply_ms not in (None, ""):
+        try:
+            plan_apply_values.append(int(round(float(plan_apply_ms))))
+        except (TypeError, ValueError):
+            pass
+    if wake_to_result_ms is not None:
+        wake_to_result_values.append(int(wake_to_result_ms))
+
+    wake_to_transcript_ms = None
+    transcript_to_result_ms = None
+    if detection_at is not None and transcript_at is not None:
+        wake_to_transcript_ms = round((transcript_at - detection_at).total_seconds() * 1000)
+    if transcript_at is not None and occurred_at is not None:
+        transcript_to_result_ms = round((occurred_at - transcript_at).total_seconds() * 1000)
+
+    detail_parts = [
+        f"source={truncate(entry.get('source', ''), limit=48)!r}",
+        f"guard={detail_value(details, 'guard', limit=48)!r}",
+        f"error={detail_value(details, 'error', limit=120)!r}",
+    ]
+    attempt_lines.append(
+        "\n".join(
+            [
+                f"{(occurred_at.isoformat() if occurred_at is not None else 'unknown')} status={entry.get('status', 'unknown')} text={truncate(entry.get('text', ''))!r}",
+                "  " + " ".join(detail_parts),
+                "  "
+                + " ".join(
+                    [
+                        f"wake_to_bridge_ms={format_ms(wake_to_bridge_ms)}",
+                        f"wake_to_transcript_ms={format_ms(wake_to_transcript_ms)}",
+                        f"transcript_to_result_ms={format_ms(transcript_to_result_ms)}",
+                        f"wake_to_result_ms={format_ms(wake_to_result_ms)}",
+                        f"bridge_total_ms={format_ms(bridge_total_ms)}",
+                        f"state_fetch_ms={format_ms(details.get('state_fetch_ms'))}",
+                        f"interpret_ms={format_ms(details.get('interpret_ms'))}",
+                        f"plan_apply_ms={format_ms(plan_apply_ms)}",
+                    ]
+                ),
+            ]
+        )
+    )
+
+unmatched_detections = sum(1 for detection in detections if not detection["matched"])
+unmatched_transcripts = sum(1 for transcript in transcripts if not transcript["matched"])
+
+print(f"== latency-check summary ({recent_window_desc}) ==")
+print(
+    "events:"
+    f" detections={len(detections)}"
+    f" transcripts={len(transcripts)}"
+    f" assist_entries={len(assist_entries)}"
+    f" executed={executed_count}"
+    f" failed={failed_count}"
+    f" unmatched_detections={unmatched_detections}"
+    f" unmatched_transcripts={unmatched_transcripts}"
+)
+print(f"wake_to_result_ms: {stats(wake_to_result_values)}")
+print(f"bridge_total_ms: {stats(bridge_total_values)}")
+print(f"plan_apply_ms: {stats(plan_apply_values)}")
+
+print()
+print("== recent assist attempts ==")
+if attempt_lines:
+    for line in attempt_lines:
+        print(line)
+else:
+    print("No recent assist activity entries were found in the selected window.")
+PY
+EOF
+)"
+
+  run_ssh_expect_with_sudo "$summary_cmd"
+}
+
 parse_debug_clean_args() {
   DEBUG_CLEAN_MODE="older-than"
   DEBUG_CLEAN_AGE="$PI_DEBUG_RECORDING_CLEAN_DEFAULT"
@@ -397,7 +839,10 @@ Usage:
   ./scripts/pi help
   ./scripts/pi status
   ./scripts/pi doctor
+  ./scripts/pi health
+  ./scripts/pi thermal-check
   ./scripts/pi wake-debug [--since <30m|2h|1d>|--all]
+  ./scripts/pi latency-check [--since <30m|2h|1d>|--all]
   ./scripts/pi ghost-check
   ./scripts/pi voice-check [--since <30m|2h|1d>|--all]
   ./scripts/pi lights-check
@@ -408,8 +853,9 @@ Usage:
   ./scripts/pi bridge-audio <on|off>
   ./scripts/pi single-voice
   ./scripts/pi satellite-channel <auto|0|1>
+  ./scripts/pi interpreter-mode <local_rules|claude_cli|auto|anthropic_api>
   ./scripts/pi cmd "<remote command>"
-  ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite> [--since <30m|2h|1d>|--all]
+  ./scripts/pi logs <homeassistant|bridge|openwakeword|stt|speech-to-phrase|whisper|piper|satellite> [--since <30m|2h|1d>|--all]
   ./scripts/pi debug-clean [--older-than <30m|2h|1d>|--all]
   ./scripts/pi bridge-test "<text>" [--execute]
   ./scripts/pi lights <room|studio|all> <on|off> [--execute]
@@ -428,8 +874,11 @@ Examples:
   ./scripts/pi help
   ./scripts/pi status
   ./scripts/pi doctor
+  ./scripts/pi health
+  ./scripts/pi thermal-check
   ./scripts/pi wake-debug
   ./scripts/pi wake-debug --all
+  ./scripts/pi latency-check
   ./scripts/pi ghost-check
   ./scripts/pi voice-check
   ./scripts/pi logs satellite --since 2h
@@ -440,7 +889,8 @@ Examples:
   ./scripts/pi shortcuts-install
   ./scripts/pi bridge-audio off
   ./scripts/pi single-voice
-  ./scripts/pi satellite-channel 0
+  ./scripts/pi satellite-channel auto
+  ./scripts/pi interpreter-mode claude_cli
   ./scripts/pi logs satellite
   ./scripts/pi bridge-test "turn the studio lights off"
   ./scripts/pi room off --execute
@@ -542,6 +992,20 @@ alias_map = {
 target_entity = alias_map.get(target_arg, target_arg)
 
 base_url = os.environ['HOME_ASSISTANT_URL'].rstrip('/')
+parsed_base_url = urllib.parse.urlsplit(base_url)
+if parsed_base_url.hostname == 'host.docker.internal':
+    netloc = '127.0.0.1'
+    if parsed_base_url.port is not None:
+        netloc = f'{netloc}:{parsed_base_url.port}'
+    base_url = urllib.parse.urlunsplit(
+        (
+            parsed_base_url.scheme,
+            netloc,
+            parsed_base_url.path,
+            parsed_base_url.query,
+            parsed_base_url.fragment,
+        )
+    ).rstrip('/')
 headers = {
     'Authorization': f\"Bearer {os.environ['HOME_ASSISTANT_TOKEN']}\",
     'Content-Type': 'application/json',
@@ -670,6 +1134,16 @@ case "$subcommand" in
     bridge_test "turn the room lights off"
     ;;
 
+  health)
+    run_ssh_expect "echo '== system ==' && hostname && hostname -I && echo && date -Iseconds && timedatectl show -p Timezone --value && echo && uptime && echo && free -h && echo && df -h / && echo && echo '== bridge /health ==' && curl -fsS 'http://127.0.0.1:8000/health' || true && echo && echo && echo '== containers ==' && docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}' && echo && echo '== audio devices ==' && arecord -l 2>/dev/null || true && echo && aplay -l 2>/dev/null || true && echo && echo '== usb devices ==' && lsusb 2>/dev/null || true"
+    printf '\n'
+    run_ssh_expect_with_sudo "echo '== wyoming satellite ==' && systemctl status wyoming-satellite.service --no-pager -l && echo && echo '== listening ports ==' && ss -ltn | egrep '8000|10200|10300|10400|10700' || true && echo && echo '== thermal ==' && if command -v vcgencmd >/dev/null 2>&1; then vcgencmd measure_temp || true; else if [ -f /sys/class/thermal/thermal_zone0/temp ]; then awk '{printf \"cpu_temp=%.1fC\\n\", \$1/1000}' /sys/class/thermal/thermal_zone0/temp; else echo 'temperature source unavailable'; fi; fi && echo && echo '== throttling ==' && if command -v vcgencmd >/dev/null 2>&1; then vcgencmd get_throttled || true; else echo 'vcgencmd unavailable'; fi && echo && echo '== recent kernel warnings ==' && dmesg -T | grep -Ei 'usb|under.?voltage|thrott|reset|disconnect|xhci|urb|snd|alsa' | tail -n 120 || true"
+    ;;
+
+  thermal-check)
+    run_ssh_expect "echo '== thermal ==' && if command -v vcgencmd >/dev/null 2>&1; then vcgencmd measure_temp || true; vcgencmd get_throttled || true; vcgencmd measure_clock arm || true; vcgencmd measure_volts core || true; else if [ -f /sys/class/thermal/thermal_zone0/temp ]; then awk '{printf \"cpu_temp=%.1fC\\n\", \$1/1000}' /sys/class/thermal/thermal_zone0/temp; fi; cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null || true; fi && echo && echo '== load ==' && uptime && echo && echo '== docker stats ==' && docker stats --no-stream --format 'table {{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}\\t{{.PIDs}}' 2>/dev/null || true && echo && echo '== top cpu ==' && ps -eo pid,comm,pcpu,pmem,args --sort=-pcpu | head -n 15 && echo && echo '== voice service env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(STT_ENGINE|SPEECH_TO_PHRASE_HASS_WEBSOCKET_URI|SPEECH_TO_PHRASE_CUSTOM_SENTENCES_DIR|WHISPER_MODEL|WHISPER_BEAM_SIZE|WHISPER_CPU_THREADS|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS|WAKE_WORD_THRESHOLD|WAKE_WORD_REFRACTORY_SECONDS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite debug env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|SATELLITE_DEBUG_RECORDING_DIR|SATELLITE_DEBUG|SATELLITE_AWAKE_WAV|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'satellite env missing'; fi && echo && echo '== audio devices ==' && arecord -l 2>/dev/null || true && echo && echo '== debug recordings ==' && if [ -d '${PI_DEBUG_RECORDING_DIR}' ]; then printf 'wav_count='; find '${PI_DEBUG_RECORDING_DIR}' -maxdepth 1 -type f -name '*.wav' | wc -l; du -sh '${PI_DEBUG_RECORDING_DIR}' 2>/dev/null || true; find '${PI_DEBUG_RECORDING_DIR}' -maxdepth 1 -type f -name '*.wav' -printf '%TY-%Tm-%Td %TH:%TM %s %p\\n' 2>/dev/null | sort | tail -n 10; else echo 'debug recording dir missing'; fi"
+    ;;
+
   wake-debug)
     parse_recent_window_args "$@"
     recent_window_desc="$(recent_window_description)"
@@ -677,17 +1151,23 @@ case "$subcommand" in
     printf '\n'
     run_ssh_expect_with_sudo "echo '== wyoming satellite ==' && systemctl status wyoming-satellite.service --no-pager -l && echo && echo '== listening ports ==' && ss -ltn | egrep '10200|10300|10400|10700' || true"
     printf '\n'
-    run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    run_ssh_expect "echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(INTERPRETER_MODE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH|MAC_CONTROL_ENABLED|MAC_CONTROL_SSH_HOST|MAC_CONTROL_SSH_USER|MAC_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(STT_ENGINE|SPEECH_TO_PHRASE_HASS_WEBSOCKET_URI|SPEECH_TO_PHRASE_CUSTOM_SENTENCES_DIR|WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_CPU_THREADS|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_DEBUG_RECORDING_DIR|SATELLITE_DEBUG|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
     wake_debug_summary "${recent_window_desc}"
     printf '\n'
     run_ssh_expect_with_sudo "echo '== satellite journal (${recent_window_desc}) ==' && $(journalctl_recent_command 'wyoming-satellite.service' 120) | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|Event\\(type=.error|No speech detected|Transcript not received|stt-no-text-recognized|Waiting for wake word|Connected to server|Connected to wake service|Connected to mic service' || true"
     printf '\n'
-    run_ssh_expect "echo '== openwakeword logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-openwakeword' 80) 2>&1 || true && echo && echo '== whisper logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-whisper' 80) 2>&1 || true && echo && echo '== bridge logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'ha-command-bridge' 80) 2>&1 | egrep -i 'assist|interpret|input text|executed:|fast path|local interpreter|error|traceback|turn on|turn off|all lights|room|studio|monitor' || true"
+    run_ssh_expect "echo '== openwakeword logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-openwakeword' 80) 2>&1 || true && echo && echo '== speech-to-phrase logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-speech-to-phrase' 80) 2>&1 || true && echo && echo '== whisper fallback logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'wyoming-whisper' 80) 2>&1 || true && echo && echo '== bridge logs (${recent_window_desc}) ==' && $(docker_logs_recent_command 'ha-command-bridge' 80) 2>&1 | egrep -i 'assist|interpret|input text|executed:|fast path|local interpreter|error|traceback|turn on|turn off|all lights|room|studio|monitor|youtube|spotify|instagram|chatgpt|safari|mac control' || true"
+    ;;
+
+  latency-check)
+    parse_recent_window_args "$@"
+    recent_window_desc="$(recent_window_description)"
+    latency_check_summary "${recent_window_desc}"
     ;;
 
   ghost-check)
-    run_ssh_expect "echo '== pending scheduled jobs ==' && curl -s 'http://127.0.0.1:8000/scheduled-jobs?status=pending' && echo && echo && echo '== enabled routines ==' && curl -s 'http://127.0.0.1:8000/routines?status=enabled' && echo && echo && echo '== recent activity ==' && curl -s 'http://127.0.0.1:8000/activity?limit=20' && echo && echo && echo '== assist guard ==' && if ! curl -fsS 'http://127.0.0.1:8000/assist-guard'; then if [ -f '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json' ]; then cat '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json'; else echo 'assist guard state missing'; fi; fi && echo && echo && echo '== saved scenes ==' && curl -s http://127.0.0.1:8000/saved-scenes && echo && echo && echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true"
+    run_ssh_expect "echo '== pending scheduled jobs ==' && curl -s 'http://127.0.0.1:8000/scheduled-jobs?status=pending' && echo && echo && echo '== enabled routines ==' && curl -s 'http://127.0.0.1:8000/routines?status=enabled' && echo && echo && echo '== recent activity ==' && curl -s 'http://127.0.0.1:8000/activity?limit=20' && echo && echo && echo '== assist guard ==' && if ! curl -fsS 'http://127.0.0.1:8000/assist-guard'; then if [ -f '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json' ]; then cat '${PI_REMOTE_BRIDGE_DATA_DIR}/assist_guard_state.json'; else echo 'assist guard state missing'; fi; fi && echo && echo && echo '== saved scenes ==' && curl -s http://127.0.0.1:8000/saved-scenes && echo && echo && echo '== bridge env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|AUTO_DISCOVER_ENTITIES|AUTO_DISCOVER_INCLUDE_UNAVAILABLE|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH|MAC_CONTROL_ENABLED|MAC_CONTROL_SSH_HOST|MAC_CONTROL_SSH_USER|MAC_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true"
     printf '\n'
     run_ssh_expect "echo '== recent bridge log hints ==' && docker logs --tail 120 ha-command-bridge 2>&1 | egrep -i 'turned on|turned off|scheduled|routine|scene|audio response|error' || true"
     ;;
@@ -695,7 +1175,7 @@ case "$subcommand" in
   voice-check)
     parse_recent_window_args "$@"
     recent_window_desc="$(recent_window_description)"
-    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
+    run_ssh_expect "echo '== bridge voice env ==' && cd '${PI_REMOTE_BRIDGE_DIR}' && grep -E '^(AUDIO_RESPONSE_ENABLED|AUDIO_RESPONSE_ENGINE|AUDIO_RESPONSE_DEVICE|AUDIO_RESPONSE_DEDUPE_WINDOW_SECONDS|AUDIO_RESPONSE_MAX_CHARS|VOICE_MODEL_FILE|FAST_PATH_LOCAL_FIRST|ASSIST_GUARD_ENABLED|ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS|ACTIVITY_LOG_MAX_ENTRIES|MONITOR_CONTROL_ENABLED|MONITOR_CONTROL_SSH_HOST|MONITOR_CONTROL_REMOTE_SCRIPT_PATH|MAC_CONTROL_ENABLED|MAC_CONTROL_SSH_HOST|MAC_CONTROL_SSH_USER|MAC_CONTROL_REMOTE_SCRIPT_PATH)=' .env || true && echo && echo '== voice services env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env' ]; then grep -E '^(STT_ENGINE|SPEECH_TO_PHRASE_HASS_WEBSOCKET_URI|SPEECH_TO_PHRASE_CUSTOM_SENTENCES_DIR|WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_LANGUAGE|WHISPER_BEAM_SIZE|WHISPER_CPU_THREADS|WHISPER_INITIAL_PROMPT|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/.env'; else echo 'voice_services/.env missing'; fi && echo && echo '== satellite env ==' && if [ -f '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env' ]; then grep -E '^(WAKE_REFRACTORY_SECONDS|WAKE_SERVICE_READY_TIMEOUT_SECONDS|WAKE_SERVICE_READY_CHECK_INTERVAL_SECONDS|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_DEBUG_RECORDING_DIR|SATELLITE_DEBUG|SATELLITE_AWAKE_WAV)=' '${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env'; else echo 'respeaker_lite_satellite.env missing'; fi"
     printf '\n'
     run_ssh_expect_with_sudo "echo '== recent satellite voice events (${recent_window_desc}) ==' && $(journalctl_recent_command 'wyoming-satellite.service' 120) | egrep 'Detection\\(|Event\\(type=.transcript|Event\\(type=.synthesize|No speech detected|Transcript not received|stt-no-text-recognized|String should have at most 500|Waiting for wake word' || true"
     ;;
@@ -745,37 +1225,52 @@ PY"
     ;;
 
   wake-tune)
+    bridge_env_file="${PI_REMOTE_BRIDGE_DIR}/.env"
     voice_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env"
     voice_services_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/.env"
-    whisper_beam_size=3
-    whisper_initial_prompt="Home automation voice commands. Transcribe speech literally and briefly. If the audio is unclear, prefer no text instead of guessing. Do not repeat phrases. Common commands: turn on the room lights. turn off the room lights. turn on the studio lights. turn off the studio lights. turn on the studio lights to 50 percent brightness. set the studio lights to 50 percent brightness. change the studio lights to blue. set the studio lights to blue. change the color of the studio lights to blue."
+    whisper_model=base-int8
+    whisper_beam_size=1
+    whisper_cpu_threads=2
+    whisper_vad_min_speech_ms=200
+    whisper_vad_min_silence_ms=700
+    whisper_initial_prompt=""
+    wake_word_threshold=0.18
     run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
       if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=8/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=8\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^MIC_AUTO_GAIN=' '${voice_env_file}'; then sed -i \"s/^MIC_AUTO_GAIN=.*/MIC_AUTO_GAIN=15/\" '${voice_env_file}'; else printf '\nMIC_AUTO_GAIN=15\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^MIC_NOISE_SUPPRESSION=' '${voice_env_file}'; then sed -i \"s/^MIC_NOISE_SUPPRESSION=.*/MIC_NOISE_SUPPRESSION=0/\" '${voice_env_file}'; else printf '\nMIC_NOISE_SUPPRESSION=0\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^MIC_VOLUME_MULTIPLIER=' '${voice_env_file}'; then sed -i \"s/^MIC_VOLUME_MULTIPLIER=.*/MIC_VOLUME_MULTIPLIER=4.0/\" '${voice_env_file}'; else printf '\nMIC_VOLUME_MULTIPLIER=4.0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^MIC_AUTO_GAIN=' '${voice_env_file}'; then sed -i \"s/^MIC_AUTO_GAIN=.*/MIC_AUTO_GAIN=5/\" '${voice_env_file}'; else printf '\nMIC_AUTO_GAIN=5\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^MIC_NOISE_SUPPRESSION=' '${voice_env_file}'; then sed -i \"s/^MIC_NOISE_SUPPRESSION=.*/MIC_NOISE_SUPPRESSION=2/\" '${voice_env_file}'; else printf '\nMIC_NOISE_SUPPRESSION=2\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^MIC_VOLUME_MULTIPLIER=' '${voice_env_file}'; then sed -i \"s/^MIC_VOLUME_MULTIPLIER=.*/MIC_VOLUME_MULTIPLIER=1.0/\" '${voice_env_file}'; else printf '\nMIC_VOLUME_MULTIPLIER=1.0\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_CHANNEL_INDEX=' '${voice_env_file}'; then sed -i \"s/^MIC_CHANNEL_INDEX=.*/MIC_CHANNEL_INDEX=/\" '${voice_env_file}'; else printf '\nMIC_CHANNEL_INDEX=\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=' '${voice_env_file}'; then sed -i \"s/^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=.*/MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0/\" '${voice_env_file}'; else printf '\nMIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_VOLUME_MULTIPLIER=' '${voice_env_file}'; then sed -i \"s/^SND_VOLUME_MULTIPLIER=.*/SND_VOLUME_MULTIPLIER=2.5/\" '${voice_env_file}'; else printf '\nSND_VOLUME_MULTIPLIER=2.5\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_CARD=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_CARD=.*/SND_MIXER_CARD=Headphones/\" '${voice_env_file}'; else printf '\nSND_MIXER_CARD=Headphones\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_CONTROL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_CONTROL=.*/SND_MIXER_CONTROL=PCM/\" '${voice_env_file}'; else printf '\nSND_MIXER_CONTROL=PCM\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_LEVEL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_LEVEL=.*/SND_MIXER_LEVEL=100%/\" '${voice_env_file}'; else printf '\nSND_MIXER_LEVEL=100%\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=20/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=20\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=0\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=.*/SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0/\" '${voice_env_file}'; else printf '\nSATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_DEBUG_RECORDING_DIR=' '${voice_env_file}'; then sed -i \"s|^SATELLITE_DEBUG_RECORDING_DIR=.*|SATELLITE_DEBUG_RECORDING_DIR=|\" '${voice_env_file}'; else printf '\nSATELLITE_DEBUG_RECORDING_DIR=\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_DEBUG=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_DEBUG=.*/SATELLITE_DEBUG=0/\" '${voice_env_file}'; else printf '\nSATELLITE_DEBUG=0\n' >> '${voice_env_file}'; fi; \
     else \
       echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \
     fi; \
+    if [ -f '${bridge_env_file}' ]; then \
+      if grep -q '^ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=' '${bridge_env_file}'; then sed -i \"s/^ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=.*/ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=45/\" '${bridge_env_file}'; else printf '\nASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=45\n' >> '${bridge_env_file}'; fi; \
+    fi; \
     if [ -f '${voice_services_env_file}' ]; then \
-      if grep -q '^WAKE_WORD_THRESHOLD=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=0.15/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=0.15\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WAKE_WORD_THRESHOLD=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_THRESHOLD=.*/WAKE_WORD_THRESHOLD=${wake_word_threshold}/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_THRESHOLD=${wake_word_threshold}\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WAKE_WORD_TRIGGER_LEVEL=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_TRIGGER_LEVEL=.*/WAKE_WORD_TRIGGER_LEVEL=1/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_TRIGGER_LEVEL=1\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=8.0/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=8.0\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WHISPER_MODEL=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_MODEL=.*/WHISPER_MODEL=${whisper_model}/\" '${voice_services_env_file}'; else printf '\nWHISPER_MODEL=${whisper_model}\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WHISPER_BEAM_SIZE=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_BEAM_SIZE=.*/WHISPER_BEAM_SIZE=${whisper_beam_size}/\" '${voice_services_env_file}'; else printf '\nWHISPER_BEAM_SIZE=${whisper_beam_size}\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WHISPER_CPU_THREADS=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_CPU_THREADS=.*/WHISPER_CPU_THREADS=${whisper_cpu_threads}/\" '${voice_services_env_file}'; else printf '\nWHISPER_CPU_THREADS=${whisper_cpu_threads}\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WHISPER_VAD_MIN_SPEECH_MS=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SPEECH_MS=.*/WHISPER_VAD_MIN_SPEECH_MS=${whisper_vad_min_speech_ms}/\" '${voice_services_env_file}'; else printf '\nWHISPER_VAD_MIN_SPEECH_MS=${whisper_vad_min_speech_ms}\n' >> '${voice_services_env_file}'; fi; \
+      if grep -q '^WHISPER_VAD_MIN_SILENCE_MS=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SILENCE_MS=.*/WHISPER_VAD_MIN_SILENCE_MS=${whisper_vad_min_silence_ms}/\" '${voice_services_env_file}'; else printf '\nWHISPER_VAD_MIN_SILENCE_MS=${whisper_vad_min_silence_ms}\n' >> '${voice_services_env_file}'; fi; \
       if grep -q '^WHISPER_INITIAL_PROMPT=' '${voice_services_env_file}'; then sed -i \"s|^WHISPER_INITIAL_PROMPT=.*|WHISPER_INITIAL_PROMPT=${whisper_initial_prompt}|\" '${voice_services_env_file}'; else printf '\nWHISPER_INITIAL_PROMPT=${whisper_initial_prompt}\n' >> '${voice_services_env_file}'; fi; \
     fi; \
-    cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && docker compose up -d openwakeword whisper && systemctl restart wyoming-satellite.service && echo '== voice services env ==' && grep -E '^(WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_BEAM_SIZE|WHISPER_INITIAL_PROMPT)=' '${voice_services_env_file}' && echo && echo '== satellite env ==' && grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_AUTO_GAIN|MIC_NOISE_SUPPRESSION|MIC_VOLUME_MULTIPLIER|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY)=' '${voice_env_file}' && echo && systemctl status wyoming-satellite.service --no-pager | sed -n '1,25p'"
+    cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && ./configure_voice_services_env.sh && (docker compose stop whisper >/dev/null 2>&1 || true) && (docker compose rm -f whisper >/dev/null 2>&1 || true) && docker compose up -d openwakeword speech-to-phrase && systemctl restart wyoming-satellite.service && echo '== voice services env ==' && grep -E '^(STT_ENGINE|SPEECH_TO_PHRASE_HASS_WEBSOCKET_URI|SPEECH_TO_PHRASE_CUSTOM_SENTENCES_DIR|WAKE_WORD_MODEL|WAKE_WORD_THRESHOLD|WAKE_WORD_TRIGGER_LEVEL|WAKE_WORD_REFRACTORY_SECONDS|WHISPER_MODEL|WHISPER_BEAM_SIZE|WHISPER_CPU_THREADS|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS|WHISPER_INITIAL_PROMPT)=' '${voice_services_env_file}' && echo && echo '== satellite env ==' && grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_AUTO_GAIN|MIC_NOISE_SUPPRESSION|MIC_VOLUME_MULTIPLIER|MIC_CAPTURE_CHANNELS|MIC_CHANNEL_INDEX|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_DEBUG_RECORDING_DIR|SATELLITE_DEBUG)=' '${voice_env_file}' && echo && systemctl status wyoming-satellite.service --no-pager | sed -n '1,25p'"
     ;;
 
   shortcuts-install)
@@ -841,6 +1336,27 @@ PY"
     fi
     ;;
 
+  interpreter-mode)
+    if [[ $# -ne 1 ]]; then
+      echo "Usage: ./scripts/pi interpreter-mode <local_rules|claude_cli|auto|anthropic_api>" >&2
+      exit 1
+    fi
+    case "$1" in
+      local_rules|claude_cli|auto|anthropic_api)
+        ;;
+      *)
+        echo "Usage: ./scripts/pi interpreter-mode <local_rules|claude_cli|auto|anthropic_api>" >&2
+        exit 1
+        ;;
+    esac
+    need_password
+    expect "${PROJECT_DIR}/scripts/set_pi_interpreter_mode.expect" \
+      "${PI_PASSWORD}" \
+      "${PI_HOST}" \
+      "${PI_REMOTE_BRIDGE_DIR}" \
+      "$1"
+    ;;
+
   cmd)
     if [[ $# -lt 1 ]]; then
       echo "Usage: ./scripts/pi cmd \"<remote command>\"" >&2
@@ -851,7 +1367,7 @@ PY"
 
   logs)
     if [[ $# -lt 1 ]]; then
-      echo "Usage: ./scripts/pi logs <homeassistant|bridge|openwakeword|whisper|piper|satellite> [--since <30m|2h|1d>|--all]" >&2
+      echo "Usage: ./scripts/pi logs <homeassistant|bridge|openwakeword|stt|speech-to-phrase|whisper|piper|satellite> [--since <30m|2h|1d>|--all]" >&2
       exit 1
     fi
     log_target="$1"
@@ -866,6 +1382,9 @@ PY"
         ;;
       openwakeword)
         run_ssh_expect "$(docker_logs_recent_command 'wyoming-openwakeword' 200)"
+        ;;
+      stt|speech-to-phrase)
+        run_ssh_expect "$(docker_logs_recent_command 'wyoming-speech-to-phrase' 200)"
         ;;
       whisper)
         run_ssh_expect "$(docker_logs_recent_command 'wyoming-whisper' 200)"
@@ -991,7 +1510,15 @@ PY"
     ;;
 
   satellite-fast)
+    bridge_env_file="${PI_REMOTE_BRIDGE_DIR}/.env"
     voice_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/respeaker_lite_satellite.env"
+    voice_services_env_file="${PI_REMOTE_BRIDGE_DIR}/voice_services/.env"
+    whisper_model=base-int8
+    whisper_beam_size=1
+    whisper_cpu_threads=2
+    whisper_vad_min_speech_ms=200
+    whisper_vad_min_silence_ms=700
+    whisper_initial_prompt=""
     run_ssh_expect_with_sudo "if [ -f '${voice_env_file}' ]; then \
       if grep -q '^WAKE_REFRACTORY_SECONDS=' '${voice_env_file}'; then sed -i \"s/^WAKE_REFRACTORY_SECONDS=.*/WAKE_REFRACTORY_SECONDS=8/\" '${voice_env_file}'; else printf '\nWAKE_REFRACTORY_SECONDS=8\n' >> '${voice_env_file}'; fi; \
       if grep -q '^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=' '${voice_env_file}'; then sed -i \"s/^MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=.*/MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0/\" '${voice_env_file}'; else printf '\nMIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV=0.0\n' >> '${voice_env_file}'; fi; \
@@ -999,13 +1526,29 @@ PY"
       if grep -q '^SND_MIXER_CARD=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_CARD=.*/SND_MIXER_CARD=Headphones/\" '${voice_env_file}'; else printf '\nSND_MIXER_CARD=Headphones\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_CONTROL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_CONTROL=.*/SND_MIXER_CONTROL=PCM/\" '${voice_env_file}'; else printf '\nSND_MIXER_CONTROL=PCM\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SND_MIXER_LEVEL=' '${voice_env_file}'; then sed -i \"s/^SND_MIXER_LEVEL=.*/SND_MIXER_LEVEL=100%/\" '${voice_env_file}'; else printf '\nSND_MIXER_LEVEL=100%\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=8/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=8\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12\n' >> '${voice_env_file}'; fi; \
-      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_STREAMING_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_STREAMING_TIMEOUT_SECONDS=.*/SATELLITE_STREAMING_TIMEOUT_SECONDS=20/\" '${voice_env_file}'; else printf '\nSATELLITE_STREAMING_TIMEOUT_SECONDS=20\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=.*/SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=.*/SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=.*/SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=0/\" '${voice_env_file}'; else printf '\nSATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=0\n' >> '${voice_env_file}'; fi; \
       if grep -q '^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=.*/SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0/\" '${voice_env_file}'; else printf '\nSATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY=0\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_DEBUG_RECORDING_DIR=' '${voice_env_file}'; then sed -i \"s|^SATELLITE_DEBUG_RECORDING_DIR=.*|SATELLITE_DEBUG_RECORDING_DIR=|\" '${voice_env_file}'; else printf '\nSATELLITE_DEBUG_RECORDING_DIR=\n' >> '${voice_env_file}'; fi; \
+      if grep -q '^SATELLITE_DEBUG=' '${voice_env_file}'; then sed -i \"s/^SATELLITE_DEBUG=.*/SATELLITE_DEBUG=0/\" '${voice_env_file}'; else printf '\nSATELLITE_DEBUG=0\n' >> '${voice_env_file}'; fi; \
+      if [ -f '${bridge_env_file}' ]; then \
+        if grep -q '^ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=' '${bridge_env_file}'; then sed -i \"s/^ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=.*/ASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=45/\" '${bridge_env_file}'; else printf '\nASSIST_GUARD_RECENT_WAKE_WINDOW_SECONDS=45\n' >> '${bridge_env_file}'; fi; \
+      fi; \
+      if [ -f '${voice_services_env_file}' ]; then \
+        if grep -q '^WAKE_WORD_REFRACTORY_SECONDS=' '${voice_services_env_file}'; then sed -i \"s/^WAKE_WORD_REFRACTORY_SECONDS=.*/WAKE_WORD_REFRACTORY_SECONDS=8.0/\" '${voice_services_env_file}'; else printf '\nWAKE_WORD_REFRACTORY_SECONDS=8.0\n' >> '${voice_services_env_file}'; fi; \
+        if grep -q '^WHISPER_MODEL=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_MODEL=.*/WHISPER_MODEL=${whisper_model}/\" '${voice_services_env_file}'; else printf '\nWHISPER_MODEL=${whisper_model}\n' >> '${voice_services_env_file}'; fi; \
+        if grep -q '^WHISPER_BEAM_SIZE=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_BEAM_SIZE=.*/WHISPER_BEAM_SIZE=${whisper_beam_size}/\" '${voice_services_env_file}'; else printf '\nWHISPER_BEAM_SIZE=${whisper_beam_size}\n' >> '${voice_services_env_file}'; fi; \
+        if grep -q '^WHISPER_CPU_THREADS=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_CPU_THREADS=.*/WHISPER_CPU_THREADS=${whisper_cpu_threads}/\" '${voice_services_env_file}'; else printf '\nWHISPER_CPU_THREADS=${whisper_cpu_threads}\n' >> '${voice_services_env_file}'; fi; \
+        if grep -q '^WHISPER_VAD_MIN_SPEECH_MS=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SPEECH_MS=.*/WHISPER_VAD_MIN_SPEECH_MS=${whisper_vad_min_speech_ms}/\" '${voice_services_env_file}'; else printf '\nWHISPER_VAD_MIN_SPEECH_MS=${whisper_vad_min_speech_ms}\n' >> '${voice_services_env_file}'; fi; \
+        if grep -q '^WHISPER_VAD_MIN_SILENCE_MS=' '${voice_services_env_file}'; then sed -i \"s/^WHISPER_VAD_MIN_SILENCE_MS=.*/WHISPER_VAD_MIN_SILENCE_MS=${whisper_vad_min_silence_ms}/\" '${voice_services_env_file}'; else printf '\nWHISPER_VAD_MIN_SILENCE_MS=${whisper_vad_min_silence_ms}\n' >> '${voice_services_env_file}'; fi; \
+        if grep -q '^WHISPER_INITIAL_PROMPT=' '${voice_services_env_file}'; then sed -i \"s|^WHISPER_INITIAL_PROMPT=.*|WHISPER_INITIAL_PROMPT=${whisper_initial_prompt}|\" '${voice_services_env_file}'; else printf '\nWHISPER_INITIAL_PROMPT=${whisper_initial_prompt}\n' >> '${voice_services_env_file}'; fi; \
+      fi; \
+      cd '${PI_REMOTE_BRIDGE_DIR}/voice_services' && ./configure_voice_services_env.sh && (docker compose stop whisper >/dev/null 2>&1 || true) && (docker compose rm -f whisper >/dev/null 2>&1 || true) && docker compose up -d speech-to-phrase; \
       systemctl restart wyoming-satellite.service; \
-      grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY)=' '${voice_env_file}'; \
+      grep -E '^(WAKE_REFRACTORY_SECONDS|MIC_SECONDS_TO_MUTE_AFTER_AWAKE_WAV|SND_VOLUME_MULTIPLIER|SND_MIXER_CARD|SND_MIXER_CONTROL|SND_MIXER_LEVEL|SATELLITE_STREAMING_TIMEOUT_SECONDS|SATELLITE_NO_SPEECH_TIMEOUT_SECONDS|SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS|SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS|SATELLITE_FORCE_ASSIST_IDLE_ON_RECOVERY|SATELLITE_DEBUG_RECORDING_DIR|SATELLITE_DEBUG)=' '${voice_env_file}'; \
+      echo; grep -E '^(STT_ENGINE|SPEECH_TO_PHRASE_HASS_WEBSOCKET_URI|SPEECH_TO_PHRASE_CUSTOM_SENTENCES_DIR|WHISPER_MODEL|WHISPER_BEAM_SIZE|WHISPER_CPU_THREADS|WHISPER_VAD_MIN_SPEECH_MS|WHISPER_VAD_MIN_SILENCE_MS)=' '${voice_services_env_file}' 2>/dev/null || true; \
       echo; systemctl status wyoming-satellite.service --no-pager; \
     else \
       echo 'Missing voice env file:' '${voice_env_file}' >&2; exit 1; \

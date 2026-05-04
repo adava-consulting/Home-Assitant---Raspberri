@@ -118,22 +118,31 @@ is too weak.
 
 Current repo defaults that matter most for reliability:
 
-- `WAKE_WORD_THRESHOLD=0.15`
-- `WHISPER_BEAM_SIZE=3`
-- `WHISPER_INITIAL_PROMPT` now explicitly prefers no text over guessing and keeps only a short list of common room/studio commands
+- `STT_ENGINE=speech_to_phrase`
+- `SPEECH_TO_PHRASE_HASS_WEBSOCKET_URI=ws://host.docker.internal:8123/api/websocket`
+- Speech-to-Phrase listens on port `10300`
+- Whisper is only an opt-in fallback on host port `10301`
+- `WAKE_WORD_THRESHOLD=0.18`
+- `WHISPER_BEAM_SIZE=1`
+- `WHISPER_CPU_THREADS=2`
+- `WHISPER_VAD_MIN_SPEECH_MS=200`
+- `WHISPER_VAD_MIN_SILENCE_MS=700`
+- `WHISPER_INITIAL_PROMPT=` empty by default to avoid command-example leakage
 - `WAKE_WORD_REFRACTORY_SECONDS=8.0`
 - `WAKE_REFRACTORY_SECONDS=8`
-- `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7`
-- `SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=12`
-- `SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2`
+- `SATELLITE_STREAMING_TIMEOUT_SECONDS=20`
+- `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0`
+- `SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0`
+- `SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=0`
 - `SND_VOLUME_MULTIPLIER=2.5`
 
 Recommended approach:
 
-- start with the better microphone
+- use Speech-to-Phrase for the normal closed-command path
 - keep Home Assistant voice pipeline modular
-- test the existing STT with the new mic first
-- if transcription is still weak, upgrade the STT layer rather than blaming the mic
+- use Whisper only for intentional open-ended experiments
+- if Speech-to-Phrase misses a command, add or fix the custom sentence instead of
+  teaching Whisper another fragile mishearing
 
 ## Why this should feel faster than phone Assist
 
@@ -256,18 +265,23 @@ missed wakes and "no text recognized" failures.
 
 Recommended first-pass values:
 
-- `MIC_AUTO_GAIN=15`
-- `MIC_NOISE_SUPPRESSION=0`
-- `MIC_VOLUME_MULTIPLIER=4.0`
+- `MIC_AUTO_GAIN=5`
+- `MIC_NOISE_SUPPRESSION=2`
+- `MIC_VOLUME_MULTIPLIER=1.0`
 - `SND_VOLUME_MULTIPLIER=2.5`
 - `MIC_CHANNEL_INDEX=` (leave blank so the satellite auto-selects the best channel)
-- `WAKE_WORD_THRESHOLD=0.15`
-- `WHISPER_BEAM_SIZE=3`
+- `WAKE_WORD_THRESHOLD=0.18`
+- `WHISPER_BEAM_SIZE=1`
+- `WHISPER_CPU_THREADS=2`
+- `WHISPER_VAD_MIN_SPEECH_MS=200`
+- `WHISPER_VAD_MIN_SILENCE_MS=700`
 - `WAKE_WORD_TRIGGER_LEVEL=1`
 - `WAKE_WORD_REFRACTORY_SECONDS=8.0`
 - `WAKE_REFRACTORY_SECONDS=8`
-- `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=7`
-- `SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=2`
+- `SATELLITE_STREAMING_TIMEOUT_SECONDS=20`
+- `SATELLITE_NO_SPEECH_TIMEOUT_SECONDS=0`
+- `SATELLITE_TRANSCRIPT_TIMEOUT_SECONDS=0`
+- `SATELLITE_POST_TRANSCRIPT_COOLDOWN_SECONDS=0`
 
 If the transcription is too quiet:
 

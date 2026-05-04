@@ -5,6 +5,26 @@ import re
 
 _NORMALIZE_PATTERN = re.compile(r"[^a-z0-9\s]")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
+_BLOCKLIST_PATTERNS = (
+    re.compile(r"^thank you very much$"),
+    re.compile(r"^hello ladies and gentlemen$"),
+    re.compile(
+        r"^if you have any questions please let us know in the comments below(?: if you have any questions)?$"
+    ),
+    re.compile(r"^we are in the past but we are not in the past$"),
+)
+_PROMPT_EXAMPLE_KEYS = (
+    "turn on the studio lights",
+    "turn off the studio lights",
+    "turn on the room lights",
+    "turn off the room lights",
+    "open youtube on the mac",
+    "enciende las luces del estudio",
+    "apaga las luces del estudio",
+    "enciende las luces de room",
+    "apaga las luces de room",
+    "abre youtube en la mac",
+)
 
 
 def normalize_transcript_text(text: str) -> str:
@@ -72,6 +92,19 @@ def looks_like_repetition_loop(text: str) -> bool:
     return False
 
 
+def looks_like_prompt_leakage(text: str) -> bool:
+    normalized_key = _normalized_text_key(text)
+    if not normalized_key:
+        return False
+
+    matched_examples = {
+        example
+        for example in _PROMPT_EXAMPLE_KEYS
+        if re.search(rf"\b{re.escape(example)}\b", normalized_key)
+    }
+    return len(matched_examples) >= 2
+
+
 def _extract_repeated_phrase_once(text: str) -> str | None:
     words = _normalized_text_key(text).split()
     if len(words) < 6:
@@ -101,6 +134,13 @@ def _extract_repeated_phrase_once(text: str) -> str | None:
 def sanitize_transcript_text(text: str, *, max_chars: int) -> str:
     normalized = normalize_transcript_text(text)
     if not normalized:
+        return ""
+
+    normalized_key = _normalized_text_key(normalized)
+    if any(pattern.match(normalized_key) for pattern in _BLOCKLIST_PATTERNS):
+        return ""
+
+    if looks_like_prompt_leakage(normalized):
         return ""
 
     if looks_like_repetition_loop(normalized):

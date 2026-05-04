@@ -12,7 +12,7 @@ set host [lindex $argv 1]
 set command [lindex $argv 2]
 set remote "lucas@$host"
 
-spawn ssh -o StrictHostKeyChecking=accept-new $remote $command
+spawn -noecho ssh -o StrictHostKeyChecking=accept-new $remote $command
 expect {
   -re "(?i)password:" {
     log_user 0
